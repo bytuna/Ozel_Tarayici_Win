@@ -1,0 +1,9 @@
+bin/
+obj/
+publish/
+publish_v*/
+*.user
+*.suo
+*.pdb
+.vs/
+.vscode/
