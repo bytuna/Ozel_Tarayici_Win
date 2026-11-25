@@ -58,14 +58,17 @@ public partial class MainWindow : Window
     private string _lastTranslateSource = string.Empty;
     private string _currentTranslateTargetLang = "tr";
     private byte[]? _lastQrPngBytes;
-    private bool _isSidebarWebInitialized;
+    private Task? _sidebarInitTask;
+    private Task? _geminiInitTask;
     private string _currentSidebarAppUrl = string.Empty;
     private string _selectedGroupColorHex = "#00B37E";
 
     private string? _lastDownloadPath;
     private string _lastNotifiedPrayer = string.Empty;
+    private DateTime _lastWeatherRefreshDate = DateTime.Today;
+    private DateTime _lastWeatherRefreshAt = DateTime.Now;
+    private readonly List<ReminderAlertWindow> _openAlerts = new();
     private bool _isInitializingSession = true;
-    private bool _isGeminiInitialized;
     private bool _suppressUrlTextChanged;
     private bool _suppressHomeTextChanged;
     private bool _forceExit;
@@ -189,22 +192,47 @@ public partial class MainWindow : Window
 
     private void SyncCollectionsFromSession()
     {
-        _bookmarks.Clear();
-        foreach (var b in _sessionData.Bookmarks) _bookmarks.Add(b);
+        var prevInit = _isInitializingSession;
+        _isInitializingSession = true;
+        try
+        {
+            _groups.Clear();
+            if (_sessionData.Groups.Count == 0)
+            {
+                _sessionData.Groups.Add(new TabGroup { Id = "general", Name = "Genel", ColorHex = "#00B37E" });
+            }
+            foreach (var g in _sessionData.Groups) _groups.Add(g);
 
-        _reminders.Clear();
-        foreach (var r in _sessionData.Reminders) _reminders.Add(r);
+            _bookmarks.Clear();
+            foreach (var b in _sessionData.Bookmarks) _bookmarks.Add(b);
 
-        _notes.Clear();
-        foreach (var n in _sessionData.StickyNotes) _notes.Add(n);
+            _reminders.Clear();
+            foreach (var r in _sessionData.Reminders) _reminders.Add(r);
 
-        RefreshFilteredPasswords();
-        RefreshFilteredHistory();
-        _downloads.Clear();
-        foreach (var dl in _sessionData.Downloads) _downloads.Add(dl);
-        _sidebarApps.Clear();
-        foreach (var app in _sessionData.SidebarApps) _sidebarApps.Add(app);
-        WeatherLocationText.Text = $"📍 {_sessionData.Location.DisplayName}";
+            _notes.Clear();
+            foreach (var n in _sessionData.StickyNotes) _notes.Add(n);
+
+            RefreshFilteredPasswords();
+            RefreshFilteredHistory();
+            _downloads.Clear();
+            foreach (var dl in _sessionData.Downloads.Take(200)) _downloads.Add(dl);
+            _sidebarApps.Clear();
+            foreach (var app in _sessionData.SidebarApps) _sidebarApps.Add(app);
+            WeatherLocationText.Text = $"📍 {_sessionData.Location.DisplayName}";
+
+            ChkAdBlock.IsChecked = _sessionData.IsAdBlockEnabled;
+            ChkFingerprint.IsChecked = _sessionData.IsAntiFingerprintEnabled;
+            ChkBlockCookies.IsChecked = _sessionData.BlockAllCookies;
+            ChkRememberTabs.IsChecked = _sessionData.RememberTabs;
+            ChkAutoSleepTabs.IsChecked = _sessionData.AutoSleepInactiveTabs;
+            ChkMinimizeToTray.IsChecked = _sessionData.MinimizeToTrayOnClose;
+            ChkRunOnStartup.IsChecked = _sessionData.RunOnWindowsStartup;
+            UpdateSidebarPinnedState();
+        }
+        finally
+        {
+            _isInitializingSession = prevInit;
+        }
     }
 
     private void RefreshFilteredHistory()
@@ -259,6 +287,17 @@ public partial class MainWindow : Window
         UpdatePrayerCountdown(now);
         CheckDueReminders(now);
         if (now.Second == 0) CheckAutoSleepTabs(now);
+
+        if (now.Date != _lastWeatherRefreshDate || (now - _lastWeatherRefreshAt).TotalMinutes >= 60)
+        {
+            _lastWeatherRefreshDate = now.Date;
+            _lastWeatherRefreshAt = now;
+            if (RemDatePicker.SelectedDate is null || RemDatePicker.SelectedDate.Value.Date < now.Date)
+            {
+                RemDatePicker.SelectedDate = now.Date;
+            }
+            _ = RefreshWeatherAndPrayerAsync();
+        }
     }
 
     private void CheckAutoSleepTabs(DateTime now)
@@ -322,6 +361,8 @@ public partial class MainWindow : Window
                         now,
                         null,
                         null);
+                    _openAlerts.Add(prayerAlert);
+                    prayerAlert.Closed += (_, _) => _openAlerts.Remove(prayerAlert);
                     prayerAlert.Show();
                 }
             }
@@ -364,6 +405,8 @@ public partial class MainWindow : Window
                         rem.IsCompleted = true;
                         SaveCurrentSessionState();
                     });
+                _openAlerts.Add(alert);
+                alert.Closed += (_, _) => _openAlerts.Remove(alert);
                 alert.Show();
             }
         }
@@ -463,38 +506,53 @@ public partial class MainWindow : Window
 
     private async Task InitializeWebViewForTabAsync(BrowserTabItem tab)
     {
-        if (tab.WebView is null) return;
+        var webView = tab.WebView;
+        if (webView is null) return;
 
         var env = tab.IsIncognito
             ? await CoreWebView2Environment.CreateAsync(null, SessionStorageService.GetUserDataFolder(true))
             : _defaultEnv ?? await CoreWebView2Environment.CreateAsync(null, SessionStorageService.GetUserDataFolder(false));
 
+        if (!_tabs.Contains(tab) || tab.IsSleeping || tab.WebView != webView)
+        {
+            webView.Dispose();
+            return;
+        }
+
         if (tab.IsIncognito)
         {
             var options = env.CreateCoreWebView2ControllerOptions();
             options.IsInPrivateModeEnabled = true;
-            await tab.WebView.EnsureCoreWebView2Async(env, options);
+            await webView.EnsureCoreWebView2Async(env, options);
         }
         else
         {
-            await tab.WebView.EnsureCoreWebView2Async(env);
+            await webView.EnsureCoreWebView2Async(env);
         }
 
-        var core = tab.WebView.CoreWebView2;
+        if (!_tabs.Contains(tab) || tab.IsSleeping || tab.WebView != webView)
+        {
+            webView.Dispose();
+            return;
+        }
+
+        var core = webView.CoreWebView2;
         if (core is null) return;
 
         core.WebMessageReceived += (_, msgArgs) =>
         {
-            var msg = msgArgs.TryGetWebMessageAsString();
-            if (msg == "__nav_back")
+            string msg;
+            try
             {
-                Dispatcher.BeginInvoke(() => BtnBack_Click(this, new RoutedEventArgs()));
+                msg = msgArgs.TryGetWebMessageAsString();
             }
-            else if (msg == "__nav_forward")
+            catch
             {
-                Dispatcher.BeginInvoke(() => BtnForward_Click(this, new RoutedEventArgs()));
+                return;
             }
-            else if (msg == "__shortcut_h")
+            if (string.IsNullOrEmpty(msg)) return;
+
+            if (msg == "__shortcut_h")
             {
                 Dispatcher.BeginInvoke(() => OpenHistoryDownloadsDrawer(showDownloads: false));
             }
@@ -508,7 +566,7 @@ public partial class MainWindow : Window
             }
             else if (msg == "__shortcut_t")
             {
-                Dispatcher.BeginInvoke(async () => await CreateTabAsync("homepage", _activeTab?.GroupId ?? "general", false, true));
+                Dispatcher.BeginInvoke(() => _ = CreateTabAsync("homepage", _activeTab?.GroupId ?? "general", _activeTab?.IsIncognito ?? false, true));
             }
             else if (msg == "__shortcut_w")
             {
@@ -522,9 +580,26 @@ public partial class MainWindow : Window
             {
                 Dispatcher.BeginInvoke(PrintActiveTab);
             }
+            else if (msg == "__shortcut_f")
+            {
+                Dispatcher.BeginInvoke(() => BtnFind_Click(this, new RoutedEventArgs()));
+            }
+            else if (msg == "__shortcut_r")
+            {
+                Dispatcher.BeginInvoke(() => BtnReload_Click(this, new RoutedEventArgs()));
+            }
+            else if (msg == "__shortcut_esc")
+            {
+                Dispatcher.BeginInvoke(CloseAllOverlaysAndPopups);
+            }
             else if (!tab.IsIncognito && msg.StartsWith("{", StringComparison.Ordinal))
             {
-                Dispatcher.BeginInvoke(() => HandleWebJsonMessage(msg));
+                var sourceUrl = msgArgs.Source ?? string.Empty;
+                if (Uri.TryCreate(sourceUrl, UriKind.Absolute, out var msgUri) &&
+                    (msgUri.Scheme == Uri.UriSchemeHttp || msgUri.Scheme == Uri.UriSchemeHttps))
+                {
+                    Dispatcher.BeginInvoke(() => HandleWebJsonMessage(msg, msgUri.Host));
+                }
             }
         };
 
@@ -532,11 +607,12 @@ public partial class MainWindow : Window
             core,
             () => ChkAdBlock.IsChecked == true,
             () => ChkBlockCookies.IsChecked == true,
-            () => ChkFingerprint.IsChecked == true);
+            () => ChkFingerprint.IsChecked == true,
+            isIncognito: tab.IsIncognito);
 
         core.DocumentTitleChanged += (_, _) =>
         {
-            Dispatcher.Invoke(() =>
+            Dispatcher.BeginInvoke(() =>
             {
                 if (!tab.IsHome && !string.IsNullOrWhiteSpace(core.DocumentTitle))
                 {
@@ -548,7 +624,7 @@ public partial class MainWindow : Window
 
         core.NavigationStarting += (_, _) =>
         {
-            Dispatcher.Invoke(() =>
+            Dispatcher.BeginInvoke(() =>
             {
                 tab.IsLoading = true;
                 if (tab == _activeTab) LoadingBadge.Visibility = Visibility.Visible;
@@ -557,7 +633,7 @@ public partial class MainWindow : Window
 
         core.NavigationCompleted += async (_, _) =>
         {
-            Dispatcher.Invoke(() =>
+            await Dispatcher.InvokeAsync(() =>
             {
                 tab.IsLoading = false;
                 tab.CanGoBack = core.CanGoBack;
@@ -582,7 +658,10 @@ public partial class MainWindow : Window
                 if (!_isInitializingSession) SaveCurrentSessionState();
             });
 
-            await TryAutofillMatchingPasswordAsync(core);
+            if (!tab.IsIncognito)
+            {
+                await TryAutofillMatchingPasswordAsync(core);
+            }
         };
 
         core.FaviconChanged += async (_, _) =>
@@ -596,7 +675,7 @@ public partial class MainWindow : Window
                 await stream.CopyToAsync(ms);
                 ms.Position = 0;
 
-                Dispatcher.Invoke(() =>
+                await Dispatcher.InvokeAsync(() =>
                 {
                     if (tab.IsHome)
                     {
@@ -617,12 +696,12 @@ public partial class MainWindow : Window
 
         core.IsDocumentPlayingAudioChanged += (_, _) =>
         {
-            Dispatcher.Invoke(() => tab.IsPlayingAudio = core.IsDocumentPlayingAudio);
+            Dispatcher.BeginInvoke(() => tab.IsPlayingAudio = core.IsDocumentPlayingAudio);
         };
 
         core.SourceChanged += (_, _) =>
         {
-            Dispatcher.Invoke(() =>
+            Dispatcher.BeginInvoke(() =>
             {
                 if (!tab.IsHome)
                 {
@@ -636,22 +715,22 @@ public partial class MainWindow : Window
         {
             args.Handled = true;
             var targetUrl = args.Uri;
-            Dispatcher.Invoke(async () =>
+            Dispatcher.BeginInvoke(() =>
             {
                 if (!string.IsNullOrWhiteSpace(targetUrl))
                 {
-                    await CreateTabAsync(targetUrl, tab.GroupId, tab.IsIncognito, switchTo: true);
+                    _ = CreateTabAsync(targetUrl, tab.GroupId, tab.IsIncognito, switchTo: true);
                 }
             });
         };
 
-        core.IsMutedChanged += (_, _) => Dispatcher.Invoke(() => tab.IsMuted = core.IsMuted);
+        core.IsMutedChanged += (_, _) => Dispatcher.BeginInvoke(() => tab.IsMuted = core.IsMuted);
 
         core.ContextMenuRequested += (_, args) => AttachRichContextMenu(core, args);
 
         core.DownloadStarting += (_, args) =>
         {
-            Dispatcher.Invoke(() =>
+            Dispatcher.BeginInvoke(() =>
             {
                 var op = args.DownloadOperation;
                 _lastDownloadPath = args.ResultFilePath;
@@ -662,9 +741,12 @@ public partial class MainWindow : Window
                 BtnOpenDownloadFolder.Visibility = Visibility.Collapsed;
                 DownloadPill.Visibility = Visibility.Visible;
 
-                op.BytesReceivedChanged += (_, _) =>
+                EventHandler<object>? onBytesChanged = null;
+                EventHandler<object>? onStateChanged = null;
+
+                onBytesChanged = (_, _) =>
                 {
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.BeginInvoke(() =>
                     {
                         var total = (long)(op.TotalBytesToReceive ?? 0);
                         var received = op.BytesReceived;
@@ -674,31 +756,48 @@ public partial class MainWindow : Window
                     });
                 };
 
-                op.StateChanged += (_, _) =>
+                onStateChanged = (_, _) =>
                 {
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.BeginInvoke(() =>
                     {
                         if (op.State == CoreWebView2DownloadState.Completed)
                         {
+                            op.BytesReceivedChanged -= onBytesChanged;
+                            op.StateChanged -= onStateChanged;
+
                             DownloadProgressBar.Value = 100;
                             DownloadPercentText.Text = "Tamam";
                             BtnOpenDownloadFolder.Visibility = Visibility.Visible;
 
-                            var rec = new DownloadRecord
+                            if (!tab.IsIncognito)
                             {
-                                FileName = Path.GetFileName(args.ResultFilePath),
-                                SavePath = args.ResultFilePath,
-                                TotalBytes = (long)(op.TotalBytesToReceive ?? 0),
-                                DownloadedAt = DateTime.Now,
-                                State = "Tamamlandı"
-                            };
-                            _sessionData.Downloads.Insert(0, rec);
-                            if (_sessionData.Downloads.Count > 200) _sessionData.Downloads.RemoveAt(_sessionData.Downloads.Count - 1);
-                            _downloads.Insert(0, rec);
-                            SaveCurrentSessionState();
+                                var rec = new DownloadRecord
+                                {
+                                    FileName = Path.GetFileName(args.ResultFilePath),
+                                    SavePath = args.ResultFilePath,
+                                    TotalBytes = (long)(op.TotalBytesToReceive ?? 0),
+                                    DownloadedAt = DateTime.Now,
+                                    State = "Tamamlandı"
+                                };
+                                _sessionData.Downloads.Insert(0, rec);
+                                if (_sessionData.Downloads.Count > 200) _sessionData.Downloads.RemoveAt(_sessionData.Downloads.Count - 1);
+                                _downloads.Insert(0, rec);
+                                if (_downloads.Count > 200) _downloads.RemoveAt(_downloads.Count - 1);
+                                SaveCurrentSessionState();
+                            }
+                        }
+                        else if (op.State == CoreWebView2DownloadState.Interrupted)
+                        {
+                            op.BytesReceivedChanged -= onBytesChanged;
+                            op.StateChanged -= onStateChanged;
+                            DownloadPercentText.Text = "İptal";
+                            DownloadPill.Visibility = Visibility.Collapsed;
                         }
                     });
                 };
+
+                op.BytesReceivedChanged += onBytesChanged;
+                op.StateChanged += onStateChanged;
             });
         };
     }
@@ -707,10 +806,20 @@ public partial class MainWindow : Window
     {
         var currentUrl = core.Source ?? string.Empty;
         if (string.IsNullOrWhiteSpace(currentUrl) || _sessionData.SavedPasswords.Count == 0) return;
+        if (!Uri.TryCreate(currentUrl, UriKind.Absolute, out var uri) ||
+            !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
 
         var match = _sessionData.SavedPasswords.FirstOrDefault(p =>
-            !string.IsNullOrWhiteSpace(p.Site) &&
-            currentUrl.Contains(p.Site.Trim(), StringComparison.OrdinalIgnoreCase));
+        {
+            if (string.IsNullOrWhiteSpace(p.Site)) return false;
+            var savedHost = Uri.TryCreate(p.Site.Trim(), UriKind.Absolute, out var savedUri) && !string.IsNullOrWhiteSpace(savedUri.Host)
+                ? savedUri.Host
+                : p.Site.Trim();
+            return WebViewPrivacyService.IsHostOrSubdomain(uri.Host, savedHost);
+        });
 
         if (match is null) return;
         await InjectCredentialsAsync(core, match);
@@ -741,24 +850,30 @@ public partial class MainWindow : Window
 
     private async void SwitchToTab(BrowserTabItem tab)
     {
-        if (_activeTab is not null) _activeTab.IsSelected = false;
-        _activeTab = tab;
-        _activeTab.IsSelected = true;
-        _activeTab.LastActiveAt = DateTime.Now;
-
-        if (_activeTab.IsSleeping)
+        try
         {
-            await WakeTabAsync(_activeTab);
-        }
+            if (_activeTab is not null) _activeTab.IsSelected = false;
+            _activeTab = tab;
+            _activeTab.IsSelected = true;
+            _activeTab.LastActiveAt = DateTime.Now;
 
-        RefreshWebViewHosts();
-        RefreshTabBarVisibility();
-        UpdateAddressAndNavState();
+            if (_activeTab.IsSleeping)
+            {
+                await WakeTabAsync(_activeTab);
+            }
+
+            if (_activeTab != tab || !_tabs.Contains(tab)) return;
+            RefreshWebViewHosts();
+            RefreshTabBarVisibility();
+            UpdateAddressAndNavState();
+        }
+        catch { }
     }
 
     private void SleepTab(BrowserTabItem tab)
     {
         if (tab.IsHome || tab.IsSleeping || tab.IsPinned) return;
+        if (_splitTab == tab) _splitTab = null;
         tab.IsSleeping = true;
         tab.IsPlayingAudio = false;
         if (tab.WebView is not null)
@@ -778,6 +893,7 @@ public partial class MainWindow : Window
         Grid.SetColumn(webView, 0);
         WebAreaGrid.Children.Add(webView);
         await InitializeWebViewForTabAsync(tab);
+        if (!_tabs.Contains(tab) || tab.IsSleeping || tab.WebView != webView) return;
         if (!tab.IsHome && Uri.TryCreate(NormalizeUrl(tab.Url), UriKind.Absolute, out var uri))
         {
             webView.CoreWebView2?.Navigate(uri.ToString());
@@ -846,7 +962,10 @@ public partial class MainWindow : Window
             }
             Grid.SetColumn(_splitTab.WebView, 2);
             _splitTab.WebView.Visibility = Visibility.Visible;
-            SplitColumn.Width = new GridLength(1, GridUnitType.Star);
+            if (SplitColumn.Width.Value == 0)
+            {
+                SplitColumn.Width = new GridLength(1, GridUnitType.Star);
+            }
             SplitDivider.Visibility = Visibility.Visible;
         }
         else
@@ -897,7 +1016,6 @@ public partial class MainWindow : Window
 
         if (_splitTab == tab)
         {
-            _splitTab.IsSplitTarget = false;
             _splitTab = null;
         }
 
@@ -910,6 +1028,7 @@ public partial class MainWindow : Window
         {
             if (tab.WebView.Parent is Grid parent) parent.Children.Remove(tab.WebView);
             tab.WebView.Dispose();
+            tab.WebView = null;
         }
 
         if (_tabs.Count == 0)
@@ -925,6 +1044,7 @@ public partial class MainWindow : Window
         else
         {
             RefreshWebViewHosts();
+            RefreshTabBarVisibility();
         }
         if (!_isInitializingSession) SaveCurrentSessionState();
     }
@@ -1032,13 +1152,15 @@ public partial class MainWindow : Window
 
     private void ComponentDispatcher_ThreadFilterMessage(ref System.Windows.Interop.MSG msg, ref bool handled)
     {
+        if (!IsVisible || !IsActive) return;
+
         const int WM_KEYDOWN = 0x0100;
         const int WM_XBUTTONDOWN = 0x020B;
         const int WM_APPCOMMAND = 0x0319;
         const int APPCOMMAND_BROWSER_BACKWARD = 1;
         const int APPCOMMAND_BROWSER_FORWARD = 2;
 
-        if (msg.message == WM_KEYDOWN && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+        if (msg.message == WM_KEYDOWN && Keyboard.Modifiers == ModifierKeys.Control)
         {
             var vk = (int)msg.wParam;
             if (vk == 'H')
@@ -1111,6 +1233,11 @@ public partial class MainWindow : Window
             }
         }
 
+        if (_activeTab?.IsIncognito == true)
+        {
+            return list.Take(8).ToList();
+        }
+
         var google = await DashboardApiService.FetchSearchSuggestionsAsync(text);
         foreach (var item in google)
         {
@@ -1122,17 +1249,25 @@ public partial class MainWindow : Window
         return list.Take(8).ToList();
     }
 
+    private void CancelPendingSuggestions()
+    {
+        _suggestCts?.Cancel();
+        _suggestCts?.Dispose();
+        _suggestCts = null;
+    }
+
     private async void UrlTextBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         if (_suppressUrlTextChanged || !UrlTextBox.IsFocused) return;
         var text = UrlTextBox.Text.Trim();
         if (text.Length < 2 || text.StartsWith("http", StringComparison.OrdinalIgnoreCase))
         {
+            CancelPendingSuggestions();
             SuggestionsPopup.IsOpen = false;
             return;
         }
 
-        _suggestCts?.Cancel();
+        CancelPendingSuggestions();
         _suggestCts = new CancellationTokenSource();
         var token = _suggestCts.Token;
 
@@ -1161,11 +1296,12 @@ public partial class MainWindow : Window
         var text = HomeSearchBox.Text.Trim();
         if (text.Length < 2)
         {
+            CancelPendingSuggestions();
             HomeSuggestionsPopup.IsOpen = false;
             return;
         }
 
-        _suggestCts?.Cancel();
+        CancelPendingSuggestions();
         _suggestCts = new CancellationTokenSource();
         var token = _suggestCts.Token;
 
@@ -1267,13 +1403,38 @@ public partial class MainWindow : Window
     private async Task EnsureGeminiPanelOpenAsync()
     {
         GeminiDrawer.Visibility = Visibility.Visible;
-        if (_isGeminiInitialized) return;
-        _isGeminiInitialized = true;
+        if (_geminiInitTask is not null)
+        {
+            await _geminiInitTask;
+            return;
+        }
 
+        _geminiInitTask = InitializeGeminiWebViewAsync();
+        try
+        {
+            await _geminiInitTask;
+        }
+        catch
+        {
+            _geminiInitTask = null;
+            throw;
+        }
+    }
+
+    private async Task InitializeGeminiWebViewAsync()
+    {
         var env = _defaultEnv ?? await CoreWebView2Environment.CreateAsync(
             null, SessionStorageService.GetUserDataFolder(false));
         await GeminiWebView.EnsureCoreWebView2Async(env);
-        GeminiWebView.CoreWebView2.Navigate("https://gemini.google.com/app");
+        if (GeminiWebView.CoreWebView2 is not null)
+        {
+            await WebViewPrivacyService.ConfigureCoreWebViewAsync(
+                GeminiWebView.CoreWebView2,
+                () => ChkAdBlock.IsChecked == true,
+                () => ChkBlockCookies.IsChecked == true,
+                () => ChkFingerprint.IsChecked == true);
+            GeminiWebView.CoreWebView2.Navigate("https://gemini.google.com/app");
+        }
     }
 
     private async void BtnGeminiToggle_Click(object sender, RoutedEventArgs e)
@@ -1504,7 +1665,7 @@ public partial class MainWindow : Window
                 ? DateTime.Now.AddMinutes(30)
                 : selectedDate.Date.AddHours(9);
         }
-        else if (TimeSpan.TryParse(timeInput, out var onlyTime))
+        else if (TimeSpan.TryParseExact(timeInput, ["h\\:mm", "hh\\:mm"], CultureInfo.InvariantCulture, out var onlyTime))
         {
             due = selectedDate.Date.Add(onlyTime);
         }
@@ -1665,15 +1826,15 @@ public partial class MainWindow : Window
     private void ToggleGroupCollapse(TabGroup group)
     {
         group.IsCollapsed = !group.IsCollapsed;
-        if (group.IsCollapsed && _activeTab?.GroupId == group.Id)
+        if (group.IsCollapsed && _activeTab is not null && !_activeTab.IsIncognito && _activeTab.GroupId == group.Id)
         {
             var otherVisible = _tabs.FirstOrDefault(t =>
-                t.GroupId != group.Id && !(_groups.FirstOrDefault(g => g.Id == t.GroupId)?.IsCollapsed ?? false));
+                !t.IsIncognito && t.GroupId != group.Id && !(_groups.FirstOrDefault(g => g.Id == t.GroupId)?.IsCollapsed ?? false));
             if (otherVisible is not null) SwitchToTab(otherVisible);
         }
         else if (!group.IsCollapsed)
         {
-            var firstTab = _tabs.FirstOrDefault(t => t.GroupId == group.Id);
+            var firstTab = _tabs.FirstOrDefault(t => !t.IsIncognito && t.GroupId == group.Id);
             if (firstTab is not null) SwitchToTab(firstTab);
         }
         RefreshTabBarVisibility();
@@ -1690,13 +1851,16 @@ public partial class MainWindow : Window
         }
 
         var general = _groups.FirstOrDefault(g => g.Id == "general") ?? _groups.First();
-        foreach (var tab in _tabs.Where(t => t.GroupId == group.Id).ToList())
+        var movedAny = false;
+        foreach (var tab in _tabs.Where(t => !t.IsIncognito && t.GroupId == group.Id).ToList())
         {
             group.Tabs.Remove(tab);
             if (!general.Tabs.Contains(tab)) general.Tabs.Add(tab);
             tab.GroupId = general.Id;
             tab.GroupColorHex = general.ColorHex;
+            movedAny = true;
         }
+        if (movedAny && general.IsCollapsed) general.IsCollapsed = false;
 
         _groups.Remove(group);
         SortTabsByGroup();
@@ -1879,7 +2043,7 @@ public partial class MainWindow : Window
         PwdPassBox.Text = new string(buffer);
     }
 
-    private void HandleWebJsonMessage(string json)
+    private void HandleWebJsonMessage(string json, string verifiedHost)
     {
         try
         {
@@ -1887,7 +2051,7 @@ public partial class MainWindow : Window
             var root = doc.RootElement;
             if (!root.TryGetProperty("type", out var t) || t.GetString() != "__pwd_capture") return;
 
-            var site = root.TryGetProperty("site", out var s) ? s.GetString() ?? "" : "";
+            var site = verifiedHost;
             var user = root.TryGetProperty("user", out var u) ? u.GetString() ?? "" : "";
             var pass = root.TryGetProperty("pass", out var p) ? p.GetString() ?? "" : "";
             if (string.IsNullOrWhiteSpace(site) || string.IsNullOrWhiteSpace(pass)) return;
@@ -1973,11 +2137,21 @@ public partial class MainWindow : Window
         }
     }
 
-    private void BtnCopyPwd_Click(object sender, RoutedEventArgs e)
+    private async void BtnCopyPwd_Click(object sender, RoutedEventArgs e)
     {
         if (sender is Button btn && btn.Tag is SavedPasswordItem item)
         {
-            Clipboard.SetText(item.Password);
+            var copied = item.Password;
+            Clipboard.SetText(copied);
+            await Task.Delay(TimeSpan.FromSeconds(25));
+            try
+            {
+                if (Clipboard.ContainsText() && Clipboard.GetText() == copied)
+                {
+                    Clipboard.Clear();
+                }
+            }
+            catch { }
         }
     }
 
@@ -2116,26 +2290,54 @@ public partial class MainWindow : Window
                 "Bu yedek dosyasını AES-256-GCM ile şifrelemek için bir ana parola belirleyin (başka bir bilgisayarda açarken bu parola gerekecektir):",
                 masterPwd =>
                 {
-                    PasswordPortabilityService.ExportEncrypted(dlg.FileName, _sessionData.SavedPasswords, masterPwd);
-                    MessageBox.Show($"{_sessionData.SavedPasswords.Count} şifre AES-256 ile şifrelenerek dışa aktarıldı.", "Dışa Aktarma Başarılı", MessageBoxButton.OK, MessageBoxImage.Information);
+                    try
+                    {
+                        PasswordPortabilityService.ExportEncrypted(dlg.FileName, _sessionData.SavedPasswords, masterPwd);
+                        MessageBox.Show($"{_sessionData.SavedPasswords.Count} şifre AES-256 ile şifrelenerek dışa aktarıldı.", "Dışa Aktarma Başarılı", MessageBoxButton.OK, MessageBoxImage.Information);
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"Dışa aktarma başarısız: {ex.Message}", "Hata", MessageBoxButton.OK, MessageBoxImage.Error);
+                    }
                 });
         }
         else if (ext == ".csv")
         {
             var confirm = MessageBox.Show(
-                "CSV dosyaları şifresiz (düz metin) olarak kaydedilir. Devam etmek istiyor musunuz?",
+                "CSV dosyaları şifresiz (düz metin) olarak kaydedilir. Ayrıca Excel gibi uygulamalarda açılması güvenlik riski oluşturabilir. Devam etmek istiyor musunuz?",
                 "Güvenlik Uyarısı",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning);
             if (confirm != MessageBoxResult.Yes) return;
 
-            PasswordPortabilityService.ExportCsv(dlg.FileName, _sessionData.SavedPasswords);
-            MessageBox.Show($"{_sessionData.SavedPasswords.Count} şifre Chrome/Edge uyumlu CSV olarak dışa aktarıldı.", "Dışa Aktarma Başarılı", MessageBoxButton.OK, MessageBoxImage.Information);
+            try
+            {
+                PasswordPortabilityService.ExportCsv(dlg.FileName, _sessionData.SavedPasswords);
+                MessageBox.Show($"{_sessionData.SavedPasswords.Count} şifre Chrome/Edge uyumlu CSV olarak dışa aktarıldı.", "Dışa Aktarma Başarılı", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"CSV dışa aktarılamadı: {ex.Message}", "Hata", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
         else
         {
-            PasswordPortabilityService.ExportJson(dlg.FileName, _sessionData.SavedPasswords);
-            MessageBox.Show($"{_sessionData.SavedPasswords.Count} şifre JSON olarak dışa aktarıldı.", "Dışa Aktarma Başarılı", MessageBoxButton.OK, MessageBoxImage.Information);
+            var confirm = MessageBox.Show(
+                "JSON dosyaları şifresiz (düz metin) olarak kaydedilir. Güvenlik için .ozelpwd formatı önerilir. Devam etmek istiyor musunuz?",
+                "Güvenlik Uyarısı",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+            if (confirm != MessageBoxResult.Yes) return;
+
+            try
+            {
+                PasswordPortabilityService.ExportJson(dlg.FileName, _sessionData.SavedPasswords);
+                MessageBox.Show($"{_sessionData.SavedPasswords.Count} şifre JSON olarak dışa aktarıldı.", "Dışa Aktarma Başarılı", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"JSON dışa aktarılamadı: {ex.Message}", "Hata", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
     }
 
@@ -2232,6 +2434,17 @@ public partial class MainWindow : Window
                 var imported = JsonSerializer.Deserialize<AppSessionData>(raw);
                 if (imported is not null)
                 {
+                    foreach (var pwd in imported.SavedPasswords)
+                    {
+                        if (string.IsNullOrEmpty(pwd.Password) && !string.IsNullOrEmpty(pwd.EncryptedPassword))
+                        {
+                            pwd.Password = SessionStorageService.UnprotectString(pwd.EncryptedPassword);
+                        }
+                    }
+                    imported.SidebarApps = imported.SidebarApps
+                        .Where(a => IsHttpOrHttpsUrl(a.Url))
+                        .ToList();
+
                     _sessionData = imported;
                     SyncCollectionsFromSession();
                     ApplyTheme(_sessionData.IsDarkTheme);
@@ -2272,6 +2485,7 @@ public partial class MainWindow : Window
     private void TabItem_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         _tabDragStartPoint = e.GetPosition(null);
+        if (FindVisualParent<Button>(e.OriginalSource as DependencyObject) is not null) return;
         if (sender is FrameworkElement fe && fe.DataContext is BrowserTabItem tab)
         {
             SwitchToTab(tab);
@@ -2440,18 +2654,19 @@ public partial class MainWindow : Window
     {
         if (sender is MenuItem mi && mi.Tag is BrowserTabItem tab)
         {
+            if (_tabs.Count <= 1)
+            {
+                MessageBox.Show("Açık olan tek sekme uyutulamaz.", "Sekme Uyut", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
             if (tab == _activeTab)
             {
                 var other = _tabs.FirstOrDefault(t => t != tab);
                 if (other is not null) SwitchToTab(other);
             }
             SleepTab(tab);
+            RefreshWebViewHosts();
         }
-    }
-
-    private void TabMenuSplit_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is MenuItem mi && mi.Tag is BrowserTabItem tab) ToggleSplitScreen(tab);
     }
 
     private async void TabMenuDuplicate_Click(object sender, RoutedEventArgs e)
@@ -2606,7 +2821,6 @@ public partial class MainWindow : Window
     {
         if (_splitTab is not null)
         {
-            _splitTab.IsSplitTarget = false;
             _splitTab = null;
             RefreshWebViewHosts();
             return;
@@ -2618,21 +2832,42 @@ public partial class MainWindow : Window
         {
             candidate = await CreateTabAsync("https://www.google.com", _activeTab?.GroupId ?? "general", false, switchTo: false);
         }
-        ToggleSplitScreen(candidate);
+        await ToggleSplitScreenAsync(candidate);
     }
 
-    private void ToggleSplitScreen(BrowserTabItem target)
+    private async void TabMenuSplit_Click(object sender, RoutedEventArgs e)
     {
+        if (sender is MenuItem mi && mi.Tag is BrowserTabItem tab) await ToggleSplitScreenAsync(tab);
+    }
+
+    private async Task ToggleSplitScreenAsync(BrowserTabItem target)
+    {
+        if (target == _activeTab)
+        {
+            if (_splitTab is not null)
+            {
+                _splitTab = null;
+                RefreshWebViewHosts();
+            }
+            else
+            {
+                BtnSplitScreen_Click(this, new RoutedEventArgs());
+            }
+            return;
+        }
+
         if (_splitTab == target)
         {
-            _splitTab.IsSplitTarget = false;
             _splitTab = null;
         }
         else
         {
-            if (_splitTab is not null) _splitTab.IsSplitTarget = false;
+            if (target.IsSleeping)
+            {
+                await WakeTabAsync(target);
+            }
+            if (!_tabs.Contains(target) || target.WebView is null) return;
             _splitTab = target;
-            _splitTab.IsSplitTarget = true;
         }
         RefreshWebViewHosts();
     }
@@ -2692,9 +2927,9 @@ public partial class MainWindow : Window
         var query = FindTextBox.Text;
         if (string.IsNullOrEmpty(query) || _activeTab?.WebView?.CoreWebView2 is null || _activeTab.IsHome) return;
 
-        var escaped = query.Replace("\\", "\\\\").Replace("'", "\\'");
+        var escaped = JsonSerializer.Serialize(query);
         var backwardsJs = forward ? "false" : "true";
-        await _activeTab.WebView.CoreWebView2.ExecuteScriptAsync($"window.find('{escaped}', false, {backwardsJs}, true);");
+        await _activeTab.WebView.CoreWebView2.ExecuteScriptAsync($"window.find({escaped}, false, {backwardsJs}, true);");
     }
 
     private void AttachRichContextMenu(CoreWebView2 core, CoreWebView2ContextMenuRequestedEventArgs args)
@@ -2884,6 +3119,11 @@ public partial class MainWindow : Window
     private async void BtnSidebarApp_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button btn || btn.Tag is not SidebarAppItem app) return;
+        if (!IsHttpOrHttpsUrl(app.Url))
+        {
+            MessageBox.Show("Yalnızca http veya https adresleri açılabilir.", "Yan Bar", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
 
         if (SidebarWebDrawer.Visibility == Visibility.Visible &&
             string.Equals(_currentSidebarAppUrl, app.Url, StringComparison.OrdinalIgnoreCase))
@@ -2896,14 +3136,35 @@ public partial class MainWindow : Window
         SidebarDrawerTitleText.Text = $"{app.Icon} {app.Name}";
         SidebarWebDrawer.Visibility = Visibility.Visible;
 
-        if (!_isSidebarWebInitialized)
+        if (_sidebarInitTask is null)
         {
-            _isSidebarWebInitialized = true;
-            var env = _defaultEnv ?? await CoreWebView2Environment.CreateAsync(null, SessionStorageService.GetUserDataFolder(false));
-            await SidebarWebView.EnsureCoreWebView2Async(env);
+            _sidebarInitTask = InitializeSidebarWebViewAsync();
+        }
+        try
+        {
+            await _sidebarInitTask;
+        }
+        catch
+        {
+            _sidebarInitTask = null;
+            return;
         }
 
         SidebarWebView.CoreWebView2?.Navigate(app.Url);
+    }
+
+    private async Task InitializeSidebarWebViewAsync()
+    {
+        var env = _defaultEnv ?? await CoreWebView2Environment.CreateAsync(null, SessionStorageService.GetUserDataFolder(false));
+        await SidebarWebView.EnsureCoreWebView2Async(env);
+        if (SidebarWebView.CoreWebView2 is not null)
+        {
+            await WebViewPrivacyService.ConfigureCoreWebViewAsync(
+                SidebarWebView.CoreWebView2,
+                () => ChkAdBlock.IsChecked == true,
+                () => ChkBlockCookies.IsChecked == true,
+                () => ChkFingerprint.IsChecked == true);
+        }
     }
 
     private void BtnCloseSidebarDrawer_Click(object sender, RoutedEventArgs e) => SidebarWebDrawer.Visibility = Visibility.Collapsed;
@@ -3220,12 +3481,7 @@ public partial class MainWindow : Window
     {
         if (CmdPaletteResultsList.SelectedItem is CommandPaletteEntry entry)
         {
-            CommandPaletteOverlay.Visibility = Visibility.Collapsed;
-            TranslateModalOverlay.Visibility = Visibility.Collapsed;
-            QrModalOverlay.Visibility = Visibility.Collapsed;
-            AddSidebarAppModalOverlay.Visibility = Visibility.Collapsed;
-            EditNoteModalOverlay.Visibility = Visibility.Collapsed;
-            WebAreaGrid.Visibility = Visibility.Visible;
+            CloseAllOverlaysAndPopups();
             entry.Execute();
         }
     }
@@ -3310,12 +3566,16 @@ public partial class MainWindow : Window
 
     private long GetTotalBrowserMemoryMb()
     {
-        long totalBytes = Process.GetCurrentProcess().WorkingSet64;
+        using var current = Process.GetCurrentProcess();
+        long totalBytes = current.WorkingSet64;
         try
         {
             foreach (var p in Process.GetProcessesByName("msedgewebview2"))
             {
-                totalBytes += p.WorkingSet64;
+                using (p)
+                {
+                    totalBytes += p.WorkingSet64;
+                }
             }
         }
         catch { }
@@ -3341,10 +3601,14 @@ public partial class MainWindow : Window
 
         try
         {
-            EmptyWorkingSet(Process.GetCurrentProcess().Handle);
+            using var current = Process.GetCurrentProcess();
+            EmptyWorkingSet(current.Handle);
             foreach (var p in Process.GetProcessesByName("msedgewebview2"))
             {
-                try { EmptyWorkingSet(p.Handle); } catch { }
+                using (p)
+                {
+                    try { EmptyWorkingSet(p.Handle); } catch { }
+                }
             }
         }
         catch { }
@@ -3384,7 +3648,7 @@ public partial class MainWindow : Window
         RefreshFilteredHistory();
         SaveCurrentSessionState();
 
-        var webViewTarget = _tabs.FirstOrDefault(t => t.WebView?.CoreWebView2 is not null)?.WebView?.CoreWebView2;
+        var webViewTarget = _tabs.FirstOrDefault(t => !t.IsIncognito && t.WebView?.CoreWebView2 is not null)?.WebView?.CoreWebView2;
         if (webViewTarget is not null)
         {
             try
@@ -3415,11 +3679,16 @@ public partial class MainWindow : Window
 
     private async void BtnClearData_Click(object sender, RoutedEventArgs e)
     {
-        if (_activeTab?.WebView?.CoreWebView2 is not null)
+        _sessionData.History.Clear();
+        RefreshFilteredHistory();
+        SaveCurrentSessionState();
+
+        var normalCore = _tabs.FirstOrDefault(t => !t.IsIncognito && t.WebView?.CoreWebView2 is not null)?.WebView?.CoreWebView2;
+        if (normalCore is not null)
         {
-            await _activeTab.WebView.CoreWebView2.Profile.ClearBrowsingDataAsync();
-            MessageBox.Show("Tarama geçmişi, önbellek ve çerezler temizlendi.", "Gizlilik", MessageBoxButton.OK, MessageBoxImage.Information);
+            await normalCore.Profile.ClearBrowsingDataAsync();
         }
+        MessageBox.Show("Tarama geçmişi, önbellek ve çerezler temizlendi.", "Gizlilik", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private async Task LoadSidebarFaviconsAsync()
@@ -3522,89 +3791,57 @@ public partial class MainWindow : Window
     {
         var ctrl = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
         var shift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
+        var alt = (Keyboard.Modifiers & ModifierKeys.Alt) == ModifierKeys.Alt;
 
-        if (ctrl && !shift && e.Key == Key.T)
+        if (ctrl && !shift && !alt && e.Key == Key.T)
         {
             e.Handled = true;
-            await CreateTabAsync("homepage", _activeTab?.GroupId ?? "general", false, true);
+            await CreateTabAsync("homepage", _activeTab?.GroupId ?? "general", _activeTab?.IsIncognito ?? false, true);
         }
-        else if (ctrl && shift && e.Key == Key.T)
+        else if (ctrl && shift && !alt && e.Key == Key.T)
         {
             e.Handled = true;
             BtnRestoreTab_Click(sender, e);
         }
-        else if (ctrl && e.Key == Key.W)
+        else if (ctrl && !shift && !alt && e.Key == Key.W)
         {
             e.Handled = true;
             if (_activeTab is not null) CloseTab(_activeTab);
         }
-        else if ((ctrl && e.Key == Key.R) || e.Key == Key.F5)
+        else if ((ctrl && !shift && !alt && e.Key == Key.R) || e.Key == Key.F5)
         {
             e.Handled = true;
             BtnReload_Click(sender, e);
         }
-        else if (ctrl && e.Key == Key.L)
+        else if (ctrl && !shift && !alt && e.Key == Key.L)
         {
             e.Handled = true;
             UrlTextBox.Focus();
             UrlTextBox.SelectAll();
         }
-        else if (ctrl && e.Key == Key.F)
+        else if (ctrl && !shift && !alt && e.Key == Key.F)
         {
             e.Handled = true;
             BtnFind_Click(sender, e);
         }
-        else if (ctrl && e.Key == Key.H)
-        {
-            e.Handled = true;
-            OpenHistoryDownloadsDrawer(showDownloads: false);
-        }
-        else if (ctrl && e.Key == Key.J)
-        {
-            e.Handled = true;
-            OpenHistoryDownloadsDrawer(showDownloads: true);
-        }
-        else if (ctrl && e.Key == Key.K)
-        {
-            e.Handled = true;
-            OpenCommandPalette();
-        }
-        else if (ctrl && e.Key == Key.P)
-        {
-            e.Handled = true;
-            PrintActiveTab();
-        }
-        else if (ctrl && (e.Key == Key.OemPlus || e.Key == Key.Add))
+        else if (ctrl && !shift && !alt && (e.Key == Key.OemPlus || e.Key == Key.Add))
         {
             e.Handled = true;
             if (_activeTab?.WebView is not null) _activeTab.WebView.ZoomFactor = Math.Min(3.0, _activeTab.WebView.ZoomFactor + 0.1);
         }
-        else if (ctrl && (e.Key == Key.OemMinus || e.Key == Key.Subtract))
+        else if (ctrl && !shift && !alt && (e.Key == Key.OemMinus || e.Key == Key.Subtract))
         {
             e.Handled = true;
             if (_activeTab?.WebView is not null) _activeTab.WebView.ZoomFactor = Math.Max(0.3, _activeTab.WebView.ZoomFactor - 0.1);
         }
-        else if (ctrl && (e.Key == Key.D0 || e.Key == Key.NumPad0))
+        else if (ctrl && !shift && !alt && (e.Key == Key.D0 || e.Key == Key.NumPad0))
         {
             e.Handled = true;
             if (_activeTab?.WebView is not null) _activeTab.WebView.ZoomFactor = 1.0;
         }
         else if (e.Key == Key.Escape)
         {
-            SuggestionsPopup.IsOpen = false;
-            FindBar.Visibility = Visibility.Collapsed;
-            SettingsDrawer.Visibility = Visibility.Collapsed;
-            HistoryDownloadsDrawer.Visibility = Visibility.Collapsed;
-            GroupModalOverlay.Visibility = Visibility.Collapsed;
-            LocationModalOverlay.Visibility = Visibility.Collapsed;
-            MasterPasswordModalOverlay.Visibility = Visibility.Collapsed;
-            EditPasswordModalOverlay.Visibility = Visibility.Collapsed;
-            CommandPaletteOverlay.Visibility = Visibility.Collapsed;
-            TranslateModalOverlay.Visibility = Visibility.Collapsed;
-            QrModalOverlay.Visibility = Visibility.Collapsed;
-            AddSidebarAppModalOverlay.Visibility = Visibility.Collapsed;
-            EditNoteModalOverlay.Visibility = Visibility.Collapsed;
-            WebAreaGrid.Visibility = Visibility.Visible;
+            CloseAllOverlaysAndPopups();
         }
     }
 
@@ -3660,12 +3897,81 @@ public partial class MainWindow : Window
 
         System.Windows.Interop.ComponentDispatcher.ThreadFilterMessage -= ComponentDispatcher_ThreadFilterMessage;
         _clockTimer.Stop();
+        CancelPendingSuggestions();
+
+        foreach (var alert in _openAlerts.ToList())
+        {
+            try { alert.Close(); } catch { }
+        }
+        _openAlerts.Clear();
+
         if (_trayIcon is not null)
         {
             _trayIcon.Visible = false;
             _trayIcon.Dispose();
         }
+
         SaveCurrentSessionState();
+
+        foreach (var tab in _tabs.ToList())
+        {
+            if (tab.WebView is not null)
+            {
+                try { tab.WebView.Dispose(); } catch { }
+                tab.WebView = null;
+            }
+        }
+        try { SidebarWebView.Dispose(); } catch { }
+        try { GeminiWebView.Dispose(); } catch { }
+
         SessionStorageService.CleanupIncognitoFolder();
+    }
+
+    private void SetModalsWebVisibility(bool visible)
+    {
+        var vis = visible ? Visibility.Visible : Visibility.Hidden;
+        WebAreaGrid.Visibility = vis;
+        if (SidebarWebDrawer.Visibility == Visibility.Visible) SidebarWebView.Visibility = vis;
+        if (GeminiDrawer.Visibility == Visibility.Visible) GeminiWebView.Visibility = vis;
+    }
+
+    private void CloseAllOverlaysAndPopups()
+    {
+        SuggestionsPopup.IsOpen = false;
+        HomeSuggestionsPopup.IsOpen = false;
+        FindBar.Visibility = Visibility.Collapsed;
+        SettingsDrawer.Visibility = Visibility.Collapsed;
+        HistoryDownloadsDrawer.Visibility = Visibility.Collapsed;
+        GroupModalOverlay.Visibility = Visibility.Collapsed;
+        LocationModalOverlay.Visibility = Visibility.Collapsed;
+        MasterPasswordModalOverlay.Visibility = Visibility.Collapsed;
+        EditPasswordModalOverlay.Visibility = Visibility.Collapsed;
+        CommandPaletteOverlay.Visibility = Visibility.Collapsed;
+        TranslateModalOverlay.Visibility = Visibility.Collapsed;
+        QrModalOverlay.Visibility = Visibility.Collapsed;
+        AddSidebarAppModalOverlay.Visibility = Visibility.Collapsed;
+        EditNoteModalOverlay.Visibility = Visibility.Collapsed;
+        _editingNoteItem = null;
+        _editingPasswordItem = null;
+        _masterPwdCallback = null;
+        _editingGroup = null;
+        SetModalsWebVisibility(true);
+    }
+
+    private static bool IsHttpOrHttpsUrl(string? url)
+    {
+        return !string.IsNullOrWhiteSpace(url) &&
+               Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri) &&
+               (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+    }
+
+    private static T? FindVisualParent<T>(DependencyObject? child) where T : DependencyObject
+    {
+        while (child is not null)
+        {
+            if (child is T match) return match;
+            child = VisualTreeHelper.GetParent(child);
+        }
+        return null;
     }
 }

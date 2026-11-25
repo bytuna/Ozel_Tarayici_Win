@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -10,6 +11,12 @@ namespace OzelTarayici.Services;
 
 public static class ScreenCaptureService
 {
+    [DllImport("user32.dll")]
+    private static extern uint GetClipboardSequenceNumber();
+
+    private static DispatcherTimer? _activeSnipTimer;
+    private static EventHandler? _activeSnipHandler;
+
     public static async Task<string?> CaptureWebViewAsync(WebView2 webView)
     {
         if (webView.CoreWebView2 is null) return null;
@@ -26,29 +33,26 @@ public static class ScreenCaptureService
 
     public static void StartRegionSnipWatcher(Action<string> onSaved)
     {
-        BitmapSource? initialImage = null;
-        try
-        {
-            if (Clipboard.ContainsImage())
-                initialImage = Clipboard.GetImage();
-        }
-        catch { }
+        StopActiveSnipWatcher();
+        var initialSeq = GetClipboardSequenceNumber();
 
-        Process.Start(new ProcessStartInfo("explorer.exe", "ms-screenclip:") { UseShellExecute = true });
+        Process.Start(new ProcessStartInfo("ms-screenclip:") { UseShellExecute = true });
 
         var elapsedMs = 0;
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
-        timer.Tick += (_, _) =>
+        EventHandler? handler = null;
+        handler = (_, _) =>
         {
             elapsedMs += 400;
             try
             {
-                if (Clipboard.ContainsImage())
+                var currentSeq = GetClipboardSequenceNumber();
+                if (currentSeq != initialSeq && Clipboard.ContainsImage())
                 {
                     var current = Clipboard.GetImage();
-                    if (current is not null && !AreImagesEqual(initialImage, current))
+                    if (current is not null)
                     {
-                        timer.Stop();
+                        StopActiveSnipWatcher();
                         var downloads = SessionStorageService.GetDownloadsFolder();
                         var savePath = Path.Combine(downloads, $"kirpma-{DateTimeOffset.Now.ToUnixTimeMilliseconds()}.png");
                         SaveBitmapAsPng(current, savePath);
@@ -62,24 +66,37 @@ public static class ScreenCaptureService
 
             if (elapsedMs >= 45000)
             {
-                timer.Stop();
+                StopActiveSnipWatcher();
             }
         };
+
+        _activeSnipTimer = timer;
+        _activeSnipHandler = handler;
+        timer.Tick += handler;
         timer.Start();
+    }
+
+    private static void StopActiveSnipWatcher()
+    {
+        if (_activeSnipTimer is not null)
+        {
+            _activeSnipTimer.Stop();
+            if (_activeSnipHandler is not null)
+            {
+                _activeSnipTimer.Tick -= _activeSnipHandler;
+            }
+        }
+        _activeSnipTimer = null;
+        _activeSnipHandler = null;
     }
 
     public static void RevealInExplorer(string filePath)
     {
         if (File.Exists(filePath))
         {
-            Process.Start("explorer.exe", $"/select,\"{filePath}\"");
+            var explorerPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
+            Process.Start(new ProcessStartInfo(explorerPath, $"/select,\"{filePath}\"") { UseShellExecute = false });
         }
-    }
-
-    private static bool AreImagesEqual(BitmapSource? a, BitmapSource b)
-    {
-        if (a is null) return false;
-        return a.PixelWidth == b.PixelWidth && a.PixelHeight == b.PixelHeight;
     }
 
     private static void SaveBitmapAsPng(BitmapSource image, string path)

@@ -124,7 +124,12 @@
                                 CornerRadius="4"
                                 SnapsToDevicePixels="True">
                             <Grid>
-                                <ScrollViewer x:Name="PART_ContentHost" Focusable="False" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden" VerticalAlignment="Center"/>
+                                <ScrollViewer x:Name="PART_ContentHost"
+                                              Focusable="False"
+                                              Margin="{TemplateBinding Padding}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
+                                              VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}"/>
                                 <TextBlock x:Name="WatermarkText"
                                            Text="{TemplateBinding Tag}"
                                            Foreground="{DynamicResource TextSecondaryBrush}"
@@ -193,11 +198,14 @@
                                     </Rectangle.RenderTransform>
                                     <Rectangle.Triggers>
                                         <EventTrigger RoutedEvent="Loaded">
-                                            <BeginStoryboard>
+                                            <BeginStoryboard x:Name="EqBar1">
                                                 <Storyboard RepeatBehavior="Forever" AutoReverse="True">
                                                     <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="0.25" To="1.0" Duration="0:0:0.36"/>
                                                 </Storyboard>
                                             </BeginStoryboard>
+                                        </EventTrigger>
+                                        <EventTrigger RoutedEvent="Unloaded">
+                                            <StopStoryboard BeginStoryboardName="EqBar1"/>
                                         </EventTrigger>
                                     </Rectangle.Triggers>
                                 </Rectangle>
@@ -207,11 +215,14 @@
                                     </Rectangle.RenderTransform>
                                     <Rectangle.Triggers>
                                         <EventTrigger RoutedEvent="Loaded">
-                                            <BeginStoryboard>
+                                            <BeginStoryboard x:Name="EqBar2">
                                                 <Storyboard RepeatBehavior="Forever" AutoReverse="True">
                                                     <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="1.0" To="0.3" Duration="0:0:0.48"/>
                                                 </Storyboard>
                                             </BeginStoryboard>
+                                        </EventTrigger>
+                                        <EventTrigger RoutedEvent="Unloaded">
+                                            <StopStoryboard BeginStoryboardName="EqBar2"/>
                                         </EventTrigger>
                                     </Rectangle.Triggers>
                                 </Rectangle>
@@ -221,11 +232,14 @@
                                     </Rectangle.RenderTransform>
                                     <Rectangle.Triggers>
                                         <EventTrigger RoutedEvent="Loaded">
-                                            <BeginStoryboard>
+                                            <BeginStoryboard x:Name="EqBar3">
                                                 <Storyboard RepeatBehavior="Forever" AutoReverse="True">
                                                     <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="0.35" To="0.95" Duration="0:0:0.41"/>
                                                 </Storyboard>
                                             </BeginStoryboard>
+                                        </EventTrigger>
+                                        <EventTrigger RoutedEvent="Unloaded">
+                                            <StopStoryboard BeginStoryboardName="EqBar3"/>
                                         </EventTrigger>
                                     </Rectangle.Triggers>
                                 </Rectangle>
@@ -823,7 +837,7 @@
                                                 </ContextMenu>
                                             </Button.ContextMenu>
                                             <Grid Width="24" Height="24">
-                                                <TextBlock x:Name="FallbackEmoji" Text="{Binding Icon}" FontSize="17" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Icon}" FontSize="17" HorizontalAlignment="Center" VerticalAlignment="Center">
                                                     <TextBlock.Style>
                                                         <Style TargetType="TextBlock">
                                                             <Style.Triggers>
@@ -1549,8 +1563,8 @@
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,12">
                         <Button DockPanel.Dock="Right" Style="{StaticResource IconToolButton}" Content="✕" Click="BtnCloseHistoryDrawer_Click"/>
                         <StackPanel Orientation="Horizontal">
-                            <Button x:Name="BtnTabHistory" Style="{StaticResource PillActionButton}" Content="📜 Geçmiş" Margin="0,0,6,0" Click="BtnSwitchToHistoryTab_Click"/>
-                            <Button x:Name="BtnTabDownloads" Style="{StaticResource PillActionButton}" Content="📥 İndirmeler" Click="BtnSwitchToDownloadsTab_Click"/>
+                            <Button Style="{StaticResource PillActionButton}" Content="📜 Geçmiş" Margin="0,0,6,0" Click="BtnSwitchToHistoryTab_Click"/>
+                            <Button Style="{StaticResource PillActionButton}" Content="📥 İndirmeler" Click="BtnSwitchToDownloadsTab_Click"/>
                         </StackPanel>
                     </DockPanel>
 

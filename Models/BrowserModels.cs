@@ -58,7 +58,6 @@ public sealed class BrowserTabItem : INotifyPropertyChanged
     private bool _isPinned;
     private bool _isSleeping;
     private bool _isSelected;
-    private bool _isSplitTarget;
     private bool _isVisibleInTabBar = true;
     private bool _isDragging;
     private bool _isDragTarget;
@@ -148,12 +147,6 @@ public sealed class BrowserTabItem : INotifyPropertyChanged
     {
         get => _isSelected;
         set { _isSelected = value; OnPropertyChanged(); }
-    }
-
-    public bool IsSplitTarget
-    {
-        get => _isSplitTarget;
-        set { _isSplitTarget = value; OnPropertyChanged(); }
     }
 
     public bool IsVisibleInTabBar
@@ -428,14 +421,4 @@ public sealed class AppSessionData
     public bool AutoSleepInactiveTabs { get; set; } = true;
     public bool RunOnWindowsStartup { get; set; }
     public bool IsSidebarPinned { get; set; } = true;
-}
-
-public sealed class DownloadStatusInfo
-{
-    public string FileName { get; set; } = string.Empty;
-    public string SavePath { get; set; } = string.Empty;
-    public long ReceivedBytes { get; set; }
-    public long TotalBytes { get; set; }
-    public int Percent => TotalBytes > 0 ? (int)Math.Round((double)ReceivedBytes * 100 / TotalBytes) : 0;
-    public string State { get; set; } = "progressing";
 }

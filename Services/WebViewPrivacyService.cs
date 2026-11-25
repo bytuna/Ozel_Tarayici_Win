@@ -47,10 +47,14 @@ public static class WebViewPrivacyService
         "ads.yahoo.com"
     ];
 
-    private static readonly string[] AllowlistKeywords =
+    private static readonly string[] AllowlistPaths =
     [
-        "accounts.google.",
-        "www.google.com/recaptcha",
+        "www.google.com/recaptcha"
+    ];
+
+    private static readonly string[] AllowlistHosts =
+    [
+        "accounts.google.com",
         "gstatic.com",
         "challenges.cloudflare.com",
         "hcaptcha.com",
@@ -64,17 +68,30 @@ public static class WebViewPrivacyService
             if (!window.chrome) {
               window.chrome = { runtime: {} };
             }
-            window.addEventListener('mouseup', (e) => {
-              if (e.button === 3) {
+
+            window.addEventListener('keydown', (e) => {
+              if (e.ctrlKey && !e.shiftKey && !e.altKey) {
+                const k = (e.key || '').toLowerCase();
+                if (k === 'h' || k === 'j' || k === 'k' || k === 't' || k === 'w' || k === 'l' || k === 'p' || k === 'f' || k === 'r') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  window.chrome?.webview?.postMessage('__shortcut_' + k);
+                }
+              } else if (e.key === 'F5' && !e.ctrlKey && !e.altKey) {
                 e.preventDefault();
-                window.chrome?.webview?.postMessage('__nav_back');
-              } else if (e.button === 4) {
-                e.preventDefault();
-                window.chrome?.webview?.postMessage('__nav_forward');
+                e.stopPropagation();
+                window.chrome?.webview?.postMessage('__shortcut_r');
+              } else if (e.key === 'Escape') {
+                window.chrome?.webview?.postMessage('__shortcut_esc');
               }
             }, true);
+          } catch {}
+        })();
+        """;
 
-            // Giriş formlarından şifre yakalama
+    public const string PasswordCaptureScript = """
+        (() => {
+          try {
             const captureFormCreds = (root) => {
               try {
                 const passEl = (root || document).querySelector('input[type="password"]');
@@ -83,7 +100,6 @@ public static class WebViewPrivacyService
                 const userEl = scope.querySelector('input[type="email"], input[type="text"], input[name*="user"], input[name*="mail"], input[autocomplete="username"]');
                 const payload = {
                   type: '__pwd_capture',
-                  site: location.hostname,
                   user: userEl ? (userEl.value || '') : '',
                   pass: passEl.value
                 };
@@ -95,17 +111,6 @@ public static class WebViewPrivacyService
             document.addEventListener('keydown', (e) => {
               if (e.key === 'Enter' && e.target && e.target.type === 'password') {
                 captureFormCreds(e.target.form || document);
-              }
-            }, true);
-
-            window.addEventListener('keydown', (e) => {
-              if (e.ctrlKey && !e.shiftKey && !e.altKey) {
-                const k = (e.key || '').toLowerCase();
-                if (k === 'h' || k === 'j' || k === 'k' || k === 't' || k === 'w' || k === 'l' || k === 'p') {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  window.chrome?.webview?.postMessage('__shortcut_' + k);
-                }
               }
             }, true);
           } catch {}
@@ -191,17 +196,48 @@ public static class WebViewPrivacyService
           }
           window.__readerModeActive = true;
           const article = document.querySelector('article') || document.querySelector('main') || document.body;
-          const title = document.title;
-          const paragraphs = Array.from(article.querySelectorAll('h1, h2, h3, p, img'))
-            .map(el => el.outerHTML)
-            .join('');
-          document.body.innerHTML = `
-            <div style="max-width: 760px; margin: 40px auto; padding: 24px; font-family: 'Segoe UI', Roboto, sans-serif; line-height: 1.8; font-size: 19px; color: #e4e4e7; background: #18181b;">
-              <button onclick="location.reload()" style="padding: 8px 16px; margin-bottom: 24px; cursor: pointer; border-radius: 6px; border: 1px solid #3f3f46; background: #27272a; color: #fff; font-weight: bold;">✕ Okuma Modundan Çık</button>
-              <h1 style="color: #00b37e; margin-bottom: 20px;">${title}</h1>
-              ${paragraphs}
-            </div>
-          `;
+          const title = document.title || '';
+
+          const container = document.createElement('div');
+          container.setAttribute('style', "max-width: 760px; margin: 40px auto; padding: 24px; font-family: 'Segoe UI', Roboto, sans-serif; line-height: 1.8; font-size: 19px; color: #e4e4e7; background: #18181b;");
+
+          const exitBtn = document.createElement('button');
+          exitBtn.type = 'button';
+          exitBtn.textContent = '✕ Okuma Modundan Çık';
+          exitBtn.setAttribute('style', 'padding: 8px 16px; margin-bottom: 24px; cursor: pointer; border-radius: 6px; border: 1px solid #3f3f46; background: #27272a; color: #fff; font-weight: bold;');
+          exitBtn.addEventListener('click', () => location.reload());
+          container.appendChild(exitBtn);
+
+          const h1 = document.createElement('h1');
+          h1.setAttribute('style', 'color: #00b37e; margin-bottom: 20px;');
+          h1.textContent = title;
+          container.appendChild(h1);
+
+          const nodes = article ? article.querySelectorAll('h1, h2, h3, p, img') : [];
+          for (const el of nodes) {
+            const tag = el.tagName.toLowerCase();
+            if (tag === 'img') {
+              const rawSrc = el.getAttribute('src') || '';
+              try {
+                const resolved = new URL(rawSrc, location.href);
+                if (resolved.protocol === 'http:' || resolved.protocol === 'https:') {
+                  const safeImg = document.createElement('img');
+                  safeImg.src = resolved.href;
+                  safeImg.alt = el.getAttribute('alt') || '';
+                  safeImg.setAttribute('style', 'max-width: 100%; height: auto; border-radius: 8px; margin: 12px 0;');
+                  container.appendChild(safeImg);
+                }
+              } catch {}
+            } else {
+              const text = (el.textContent || '').trim();
+              if (!text) continue;
+              const safeEl = document.createElement(tag);
+              safeEl.textContent = text;
+              container.appendChild(safeEl);
+            }
+          }
+
+          document.body.replaceChildren(container);
           document.body.style.backgroundColor = '#18181b';
           return 'entered';
         })();
@@ -251,13 +287,18 @@ public static class WebViewPrivacyService
         CoreWebView2 core,
         Func<bool> isAdBlockEnabled,
         Func<bool> isBlockAllCookies,
-        Func<bool> isAntiFingerprintEnabled)
+        Func<bool> isAntiFingerprintEnabled,
+        bool isIncognito = false)
     {
         core.Settings.IsStatusBarEnabled = false;
         core.Settings.AreDefaultContextMenusEnabled = true;
         core.Settings.AreBrowserAcceleratorKeysEnabled = false;
 
         await core.AddScriptToExecuteOnDocumentCreatedAsync(AntiFingerprintAndStealthScript);
+        if (!isIncognito)
+        {
+            await core.AddScriptToExecuteOnDocumentCreatedAsync(PasswordCaptureScript);
+        }
         if (isAdBlockEnabled())
         {
             await core.AddScriptToExecuteOnDocumentCreatedAsync(CosmeticAdBlockScript);
@@ -292,16 +333,22 @@ public static class WebViewPrivacyService
 
             if (!isBlockAllCookies()) return;
             var currentUrl = core.Source ?? string.Empty;
-            if (currentUrl.Contains("google.com", StringComparison.OrdinalIgnoreCase) ||
-                currentUrl.Contains("cloudflare.com", StringComparison.OrdinalIgnoreCase) ||
-                currentUrl.Contains("ti.com", StringComparison.OrdinalIgnoreCase))
+            if (!Uri.TryCreate(currentUrl, UriKind.Absolute, out var currentUri)) return;
+            var host = currentUri.Host;
+            if (IsHostOrSubdomain(host, "google.com") ||
+                IsHostOrSubdomain(host, "cloudflare.com") ||
+                IsHostOrSubdomain(host, "ti.com"))
             {
                 return;
             }
 
             try
             {
-                core.CookieManager.DeleteAllCookies();
+                var cookies = await core.CookieManager.GetCookiesAsync(currentUri.AbsoluteUri);
+                foreach (var cookie in cookies)
+                {
+                    core.CookieManager.DeleteCookie(cookie);
+                }
             }
             catch
             {
@@ -311,24 +358,59 @@ public static class WebViewPrivacyService
 
         core.ServerCertificateErrorDetected += (_, args) =>
         {
-            args.Action = CoreWebView2ServerCertificateErrorAction.AlwaysAllow;
+            if (Uri.TryCreate(args.RequestUri, UriKind.Absolute, out var certUri) && certUri.IsLoopback)
+            {
+                args.Action = CoreWebView2ServerCertificateErrorAction.AlwaysAllow;
+            }
+            else
+            {
+                args.Action = CoreWebView2ServerCertificateErrorAction.Default;
+            }
         };
+    }
+
+    public static bool IsHostOrSubdomain(string host, string domain)
+    {
+        if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(domain)) return false;
+        return host.Equals(domain, StringComparison.OrdinalIgnoreCase) ||
+               host.EndsWith("." + domain, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ShouldBlockUrl(string url)
     {
         if (string.IsNullOrWhiteSpace(url)) return false;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
+        var host = uri.Host;
+        var hostAndPath = host + uri.AbsolutePath;
 
-        foreach (var allowed in AllowlistKeywords)
+        foreach (var allowedHost in AllowlistHosts)
         {
-            if (url.Contains(allowed, StringComparison.OrdinalIgnoreCase))
+            if (IsHostOrSubdomain(host, allowedHost))
+                return false;
+        }
+        foreach (var allowedPath in AllowlistPaths)
+        {
+            if (hostAndPath.StartsWith(allowedPath, StringComparison.OrdinalIgnoreCase))
                 return false;
         }
 
         foreach (var blocked in BlockedDomains)
         {
-            if (url.Contains(blocked, StringComparison.OrdinalIgnoreCase))
+            if (blocked.Contains('/'))
+            {
+                if (hostAndPath.StartsWith(blocked, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            else if (blocked.EndsWith('.'))
+            {
+                if (host.StartsWith(blocked, StringComparison.OrdinalIgnoreCase) ||
+                    host.Contains("." + blocked, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            else if (IsHostOrSubdomain(host, blocked))
+            {
                 return true;
+            }
         }
 
         return false;

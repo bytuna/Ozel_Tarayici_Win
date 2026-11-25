@@ -16,7 +16,7 @@
         </Border.Effect>
         <StackPanel>
             <DockPanel Margin="0,0,0,8">
-                <Button DockPanel.Dock="Right" Content="✕" Background="Transparent" Foreground="#A1A1AA" BorderThickness="0" Cursor="Hand" Click="BtnOk_Click"/>
+                <Button DockPanel.Dock="Right" Content="✕" Background="Transparent" Foreground="#A1A1AA" BorderThickness="0" Cursor="Hand" Click="BtnDismiss_Click"/>
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Text="⏰" FontSize="16" Margin="0,0,6,0" VerticalAlignment="Center"/>
                     <TextBlock Text="Zamanlı Hatırlatıcı" Foreground="#00FFAA" FontWeight="Bold" FontSize="14" VerticalAlignment="Center"/>
@@ -26,9 +26,9 @@
             <TextBlock x:Name="MessageText" Text="" Foreground="#F4F4F5" FontSize="13.5" FontWeight="Medium" TextWrapping="Wrap" Margin="0,0,0,6"/>
             <TextBlock x:Name="TimeText" Text="" Foreground="#A1A1AA" FontSize="11" Margin="0,0,0,14"/>
 
-            <UniformGrid Columns="3">
-                <Button Content="⏳ 5 dk Ertele" Margin="0,0,4,0" Padding="6,7" Background="#27272A" Foreground="#F4F4F5" BorderBrush="#3F3F46" BorderThickness="1" Cursor="Hand" Click="BtnSnooze5_Click"/>
-                <Button Content="⏳ 15 dk Ertele" Margin="2,0,2,0" Padding="6,7" Background="#27272A" Foreground="#F4F4F5" BorderBrush="#3F3F46" BorderThickness="1" Cursor="Hand" Click="BtnSnooze15_Click"/>
+            <UniformGrid x:Name="ActionGrid" Columns="3">
+                <Button x:Name="BtnSnooze5" Content="⏳ 5 dk Ertele" Margin="0,0,4,0" Padding="6,7" Background="#27272A" Foreground="#F4F4F5" BorderBrush="#3F3F46" BorderThickness="1" Cursor="Hand" Click="BtnSnooze5_Click"/>
+                <Button x:Name="BtnSnooze15" Content="⏳ 15 dk Ertele" Margin="2,0,2,0" Padding="6,7" Background="#27272A" Foreground="#F4F4F5" BorderBrush="#3F3F46" BorderThickness="1" Cursor="Hand" Click="BtnSnooze15_Click"/>
                 <Button Content="✓ Tamam" Margin="4,0,0,0" Padding="6,7" Background="#00B37E" Foreground="White" BorderThickness="0" FontWeight="Bold" Cursor="Hand" Click="BtnOk_Click"/>
             </UniformGrid>
         </StackPanel>

@@ -14,11 +14,13 @@ public static class PasswordPortabilityService
     private const int NonceSize = 12;
     private const int TagSize = 16;
     private const int KeySize = 32;
-    private const int Pbkdf2Iterations = 100_000;
+    private const int Pbkdf2IterationsV1 = 100_000;
+    private const int Pbkdf2IterationsV2 = 600_000;
+    private static readonly byte[] VaultAadV2 = Encoding.UTF8.GetBytes("OzelTarayici.Vault.v2");
 
     private sealed class EncryptedVaultEnvelope
     {
-        public int Version { get; set; } = 1;
+        public int Version { get; set; } = 2;
         public string Salt { get; set; } = string.Empty;
         public string Nonce { get; set; } = string.Empty;
         public string Tag { get; set; } = string.Empty;
@@ -46,22 +48,31 @@ public static class PasswordPortabilityService
         var nonce = RandomNumberGenerator.GetBytes(NonceSize);
         var tag = new byte[TagSize];
         var cipher = new byte[plainBytes.Length];
+        var key = Rfc2898DeriveBytes.Pbkdf2(masterPassword, salt, Pbkdf2IterationsV2, HashAlgorithmName.SHA256, KeySize);
 
-        var key = Rfc2898DeriveBytes.Pbkdf2(masterPassword, salt, Pbkdf2Iterations, HashAlgorithmName.SHA256, KeySize);
-        using (var aes = new AesGcm(key, TagSize))
+        try
         {
-            aes.Encrypt(nonce, plainBytes, cipher, tag);
+            using (var aes = new AesGcm(key, TagSize))
+            {
+                aes.Encrypt(nonce, plainBytes, cipher, tag, VaultAadV2);
+            }
+
+            var envelope = new EncryptedVaultEnvelope
+            {
+                Version = 2,
+                Salt = Convert.ToBase64String(salt),
+                Nonce = Convert.ToBase64String(nonce),
+                Tag = Convert.ToBase64String(tag),
+                CipherText = Convert.ToBase64String(cipher)
+            };
+
+            File.WriteAllText(filePath, JsonSerializer.Serialize(envelope, new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
         }
-
-        var envelope = new EncryptedVaultEnvelope
+        finally
         {
-            Salt = Convert.ToBase64String(salt),
-            Nonce = Convert.ToBase64String(nonce),
-            Tag = Convert.ToBase64String(tag),
-            CipherText = Convert.ToBase64String(cipher)
-        };
-
-        File.WriteAllText(filePath, JsonSerializer.Serialize(envelope, new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
+            CryptographicOperations.ZeroMemory(key);
+            CryptographicOperations.ZeroMemory(plainBytes);
+        }
     }
 
     public static List<SavedPasswordItem> ImportEncrypted(string filePath, string masterPassword)
@@ -70,25 +81,44 @@ public static class PasswordPortabilityService
         var envelope = JsonSerializer.Deserialize<EncryptedVaultEnvelope>(raw)
             ?? throw new InvalidDataException("Şifreli kasa dosyası okunamadı.");
 
+        if (envelope.Version is not (1 or 2))
+            throw new InvalidDataException($"Desteklenmeyen kasa sürümü: {envelope.Version}");
+
         var salt = Convert.FromBase64String(envelope.Salt);
         var nonce = Convert.FromBase64String(envelope.Nonce);
         var tag = Convert.FromBase64String(envelope.Tag);
         var cipher = Convert.FromBase64String(envelope.CipherText);
+
+        if (salt.Length != SaltSize || nonce.Length != NonceSize || tag.Length != TagSize)
+            throw new InvalidDataException("Şifreli kasa başlık boyutları geçersiz.");
+
         var plain = new byte[cipher.Length];
+        var iterations = envelope.Version == 1 ? Pbkdf2IterationsV1 : Pbkdf2IterationsV2;
+        var key = Rfc2898DeriveBytes.Pbkdf2(masterPassword, salt, iterations, HashAlgorithmName.SHA256, KeySize);
 
-        var key = Rfc2898DeriveBytes.Pbkdf2(masterPassword, salt, Pbkdf2Iterations, HashAlgorithmName.SHA256, KeySize);
-        using (var aes = new AesGcm(key, TagSize))
+        try
         {
-            aes.Decrypt(nonce, cipher, tag, plain);
+            using (var aes = new AesGcm(key, TagSize))
+            {
+                if (envelope.Version == 2)
+                    aes.Decrypt(nonce, cipher, tag, plain, VaultAadV2);
+                else
+                    aes.Decrypt(nonce, cipher, tag, plain);
+            }
+
+            var list = JsonSerializer.Deserialize<List<PortablePasswordDto>>(Encoding.UTF8.GetString(plain)) ?? new();
+            return list.Select(x => new SavedPasswordItem
+            {
+                Site = x.Site,
+                Username = x.Username,
+                Password = x.Password
+            }).ToList();
         }
-
-        var list = JsonSerializer.Deserialize<List<PortablePasswordDto>>(Encoding.UTF8.GetString(plain)) ?? new();
-        return list.Select(x => new SavedPasswordItem
+        finally
         {
-            Site = x.Site,
-            Username = x.Username,
-            Password = x.Password
-        }).ToList();
+            CryptographicOperations.ZeroMemory(key);
+            CryptographicOperations.ZeroMemory(plain);
+        }
     }
 
     public static void ExportCsv(string filePath, IEnumerable<SavedPasswordItem> items)
