@@ -31,6 +31,8 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<HistoryEntry> _filteredHistory = new();
     private readonly ObservableCollection<DownloadRecord> _downloads = new();
     private readonly ObservableCollection<SidebarAppItem> _sidebarApps = new();
+    private readonly ObservableCollection<string> _compatibleDomains = new();
+    private readonly object _compatibleDomainsSync = new();
     private readonly Stack<SavedTabState> _closedTabs = new();
     private readonly ObservableCollection<TabGroup> _groups = new();
 
@@ -48,6 +50,11 @@ public partial class MainWindow : Window
     private PrayerTimesInfo? _todayPrayerTimes;
     private List<LocationSearchResult> _locationSearchResults = new();
     private CancellationTokenSource? _suggestCts;
+    private CancellationTokenSource? _findDebounceCts;
+    private BrowserTabItem? _activeFindTab;
+    private string _lastFindQuery = string.Empty;
+    private bool _lastFindCaseSensitive;
+    private bool _isFindSessionActive;
     private Point _noteDragStartPoint;
     private Point _tabDragStartPoint;
     private SavedPasswordItem? _pendingCapturedPassword;
@@ -60,6 +67,8 @@ public partial class MainWindow : Window
     private byte[]? _lastQrPngBytes;
     private Task? _sidebarInitTask;
     private Task? _geminiInitTask;
+    private WebViewPrivacyController? _sidebarPrivacyController;
+    private WebViewPrivacyController? _geminiPrivacyController;
     private string _currentSidebarAppUrl = string.Empty;
     private string _selectedGroupColorHex = "#00B37E";
 
@@ -70,7 +79,6 @@ public partial class MainWindow : Window
     private readonly List<ReminderAlertWindow> _openAlerts = new();
     private bool _isInitializingSession = true;
     private bool _suppressUrlTextChanged;
-    private bool _suppressHomeTextChanged;
     private bool _forceExit;
 
     private readonly DispatcherTimer _clockTimer = new() { Interval = TimeSpan.FromSeconds(1) };
@@ -88,6 +96,7 @@ public partial class MainWindow : Window
         HistoryItemsControl.ItemsSource = _filteredHistory;
         DownloadsItemsControl.ItemsSource = _downloads;
         SidebarAppsItemsControl.ItemsSource = _sidebarApps;
+        CompatibleDomainsItemsControl.ItemsSource = _compatibleDomains;
 
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
@@ -218,6 +227,7 @@ public partial class MainWindow : Window
             foreach (var dl in _sessionData.Downloads.Take(200)) _downloads.Add(dl);
             _sidebarApps.Clear();
             foreach (var app in _sessionData.SidebarApps) _sidebarApps.Add(app);
+            RefreshCompatibleDomainsUi();
             WeatherLocationText.Text = $"📍 {_sessionData.Location.DisplayName}";
 
             ChkAdBlock.IsChecked = _sessionData.IsAdBlockEnabled;
@@ -582,7 +592,7 @@ public partial class MainWindow : Window
             }
             else if (msg == "__shortcut_f")
             {
-                Dispatcher.BeginInvoke(() => BtnFind_Click(this, new RoutedEventArgs()));
+                Dispatcher.BeginInvoke(() => _ = OpenFindUiAsync(toggleIfOpen: false));
             }
             else if (msg == "__shortcut_r")
             {
@@ -603,12 +613,14 @@ public partial class MainWindow : Window
             }
         };
 
-        await WebViewPrivacyService.ConfigureCoreWebViewAsync(
+        tab.PrivacyController = await WebViewPrivacyService.ConfigureCoreWebViewAsync(
             core,
             () => ChkAdBlock.IsChecked == true,
             () => ChkBlockCookies.IsChecked == true,
             () => ChkFingerprint.IsChecked == true,
-            isIncognito: tab.IsIncognito);
+            IsUrlCompatible,
+            isIncognito: tab.IsIncognito,
+            initialUrl: tab.IsHome ? null : NormalizeUrl(tab.Url));
 
         core.DocumentTitleChanged += (_, _) =>
         {
@@ -622,17 +634,82 @@ public partial class MainWindow : Window
             });
         };
 
-        core.NavigationStarting += (_, _) =>
+        var lastNavigatingUri = tab.IsHome ? string.Empty : NormalizeUrl(tab.Url);
+        tab.IsPdfDocument = !tab.IsHome && WebViewPrivacyService.IsPdfUrl(lastNavigatingUri);
+
+        try
         {
+            core.Find.MatchCountChanged += (_, _) =>
+                Dispatcher.BeginInvoke(() => UpdateFindMatchCountDisplay(tab));
+            core.Find.ActiveMatchIndexChanged += (_, _) =>
+                Dispatcher.BeginInvoke(() => UpdateFindMatchCountDisplay(tab));
+        }
+        catch { }
+
+        core.NavigationStarting += (_, navArgs) =>
+        {
+            lastNavigatingUri = navArgs.Uri ?? string.Empty;
+            var isPdf = WebViewPrivacyService.IsPdfUrl(lastNavigatingUri);
             Dispatcher.BeginInvoke(() =>
             {
+                tab.IsPdfDocument = isPdf;
+                if (tab == _activeFindTab)
+                {
+                    _isFindSessionActive = false;
+                }
                 tab.IsLoading = true;
                 if (tab == _activeTab) LoadingBadge.Visibility = Visibility.Visible;
             });
         };
 
+        core.WebResourceResponseReceived += (_, respArgs) =>
+        {
+            try
+            {
+                if (respArgs.Response.StatusCode < 200 || respArgs.Response.StatusCode >= 300) return;
+                if (!respArgs.Response.Headers.Contains("Content-Type")) return;
+                var contentType = respArgs.Response.Headers.GetHeader("Content-Type");
+                if (string.IsNullOrEmpty(contentType) ||
+                    !contentType.Contains("application/pdf", StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                var reqUri = respArgs.Request.Uri ?? string.Empty;
+                if (string.Equals(reqUri, lastNavigatingUri, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(reqUri, core.Source, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(reqUri, tab.Url, StringComparison.OrdinalIgnoreCase))
+                {
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        tab.IsPdfDocument = true;
+                        try { core.Settings.AreBrowserAcceleratorKeysEnabled = true; } catch { }
+                    });
+                }
+            }
+            catch { }
+        };
+
         core.NavigationCompleted += async (_, _) =>
         {
+            if (!tab.IsPdfDocument && WebViewPrivacyService.IsPdfUrl(core.Source))
+            {
+                tab.IsPdfDocument = true;
+            }
+            else if (!tab.IsPdfDocument && !IsUrlCompatible(core.Source))
+            {
+                try
+                {
+                    var ctRaw = await core.ExecuteScriptAsync("document.contentType");
+                    if (!string.IsNullOrEmpty(ctRaw) && ctRaw.Contains("application/pdf", StringComparison.OrdinalIgnoreCase))
+                    {
+                        tab.IsPdfDocument = true;
+                        try { core.Settings.AreBrowserAcceleratorKeysEnabled = true; } catch { }
+                    }
+                }
+                catch { }
+            }
+
             await Dispatcher.InvokeAsync(() =>
             {
                 tab.IsLoading = false;
@@ -658,7 +735,7 @@ public partial class MainWindow : Window
                 if (!_isInitializingSession) SaveCurrentSessionState();
             });
 
-            if (!tab.IsIncognito)
+            if (!tab.IsIncognito && !IsUrlCompatible(core.Source))
             {
                 await TryAutofillMatchingPasswordAsync(core);
             }
@@ -706,7 +783,11 @@ public partial class MainWindow : Window
                 if (!tab.IsHome)
                 {
                     tab.Url = core.Source;
-                    if (tab == _activeTab) SetAddressBoxText(tab.Url);
+                    if (tab == _activeTab)
+                    {
+                        SetAddressBoxText(tab.Url);
+                        UpdateSiteShieldAndExternalButtons();
+                    }
                 }
             });
         };
@@ -852,6 +933,10 @@ public partial class MainWindow : Window
     {
         try
         {
+            if (_activeTab != tab)
+            {
+                StopActiveFindSession(hideFindBar: true);
+            }
             if (_activeTab is not null) _activeTab.IsSelected = false;
             _activeTab = tab;
             _activeTab.IsSelected = true;
@@ -882,6 +967,7 @@ public partial class MainWindow : Window
             tab.WebView.Dispose();
             tab.WebView = null;
         }
+        tab.PrivacyController = null;
     }
 
     private async Task WakeTabAsync(BrowserTabItem tab)
@@ -983,13 +1069,6 @@ public partial class MainWindow : Window
         _suppressUrlTextChanged = false;
     }
 
-    private void SetHomeSearchBoxText(string text)
-    {
-        _suppressHomeTextChanged = true;
-        HomeSearchBox.Text = text;
-        _suppressHomeTextChanged = false;
-    }
-
     private void UpdateAddressAndNavState()
     {
         if (_activeTab is null) return;
@@ -997,6 +1076,7 @@ public partial class MainWindow : Window
         BtnBack.IsEnabled = _activeTab.CanGoBack || !_activeTab.IsHome;
         BtnForward.IsEnabled = _activeTab.CanGoForward;
         LoadingBadge.Visibility = _activeTab.IsLoading ? Visibility.Visible : Visibility.Collapsed;
+        UpdateSiteShieldAndExternalButtons();
     }
 
     private async void CloseTab(BrowserTabItem tab)
@@ -1018,6 +1098,10 @@ public partial class MainWindow : Window
         {
             _splitTab = null;
         }
+        if (_activeFindTab == tab)
+        {
+            StopActiveFindSession(hideFindBar: true);
+        }
 
         var idx = _tabs.IndexOf(tab);
         _tabs.Remove(tab);
@@ -1030,6 +1114,7 @@ public partial class MainWindow : Window
             tab.WebView.Dispose();
             tab.WebView = null;
         }
+        tab.PrivacyController = null;
 
         if (_tabs.Count == 0)
         {
@@ -1058,7 +1143,9 @@ public partial class MainWindow : Window
 
         if (string.Equals(trimmed, "homepage", StringComparison.OrdinalIgnoreCase))
         {
+            StopActiveFindSession(hideFindBar: true);
             _activeTab.IsHome = true;
+            _activeTab.IsPdfDocument = false;
             _activeTab.Url = "homepage";
             _activeTab.FaviconSource = null;
             _activeTab.IsPlayingAudio = false;
@@ -1076,8 +1163,18 @@ public partial class MainWindow : Window
             _activeTab.Title = parsedUri.Host.Replace("www.", string.Empty, StringComparison.OrdinalIgnoreCase);
         }
         RefreshWebViewHosts();
+        UpdateSiteShieldAndExternalButtons();
+        _ = NavigateTabWithPolicyAsync(_activeTab, targetUrl);
+    }
 
-        _activeTab.WebView?.CoreWebView2?.Navigate(targetUrl);
+    private async Task NavigateTabWithPolicyAsync(BrowserTabItem tab, string targetUrl)
+    {
+        if (tab.PrivacyController is not null)
+        {
+            await tab.PrivacyController.PrepareForNavigationAsync(targetUrl);
+        }
+        if (!_tabs.Contains(tab) || tab.IsSleeping) return;
+        tab.WebView?.CoreWebView2?.Navigate(targetUrl);
     }
 
     private static string NormalizeUrl(string input)
@@ -1187,6 +1284,12 @@ public partial class MainWindow : Window
                 Dispatcher.BeginInvoke(PrintActiveTab);
                 return;
             }
+            if (vk == 'F')
+            {
+                handled = true;
+                Dispatcher.BeginInvoke(() => _ = OpenFindUiAsync(toggleIfOpen: false));
+                return;
+            }
         }
 
         if (msg.message == WM_XBUTTONDOWN)
@@ -1290,79 +1393,6 @@ public partial class MainWindow : Window
         catch (TaskCanceledException) { }
     }
 
-    private async void HomeSearchBox_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        if (_suppressHomeTextChanged || !HomeSearchBox.IsFocused) return;
-        var text = HomeSearchBox.Text.Trim();
-        if (text.Length < 2)
-        {
-            CancelPendingSuggestions();
-            HomeSuggestionsPopup.IsOpen = false;
-            return;
-        }
-
-        CancelPendingSuggestions();
-        _suggestCts = new CancellationTokenSource();
-        var token = _suggestCts.Token;
-
-        try
-        {
-            await Task.Delay(180, token);
-            var suggestions = await BuildCombinedSuggestionsAsync(text);
-            if (token.IsCancellationRequested) return;
-
-            if (suggestions.Count > 0 && HomeSearchBox.IsFocused)
-            {
-                HomeSuggestionsListBox.ItemsSource = suggestions;
-                HomeSuggestionsPopup.IsOpen = true;
-            }
-            else
-            {
-                HomeSuggestionsPopup.IsOpen = false;
-            }
-        }
-        catch (TaskCanceledException) { }
-    }
-
-    private void HomeSuggestionsListBox_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
-    {
-        if (HomeSuggestionsListBox.SelectedItem is string selected)
-        {
-            HomeSuggestionsPopup.IsOpen = false;
-            HomeSearchBox.Clear();
-            NavigateActiveTab(selected);
-        }
-    }
-
-    private void HomeSuggestionsListBox_KeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Enter && HomeSuggestionsListBox.SelectedItem is string selected)
-        {
-            HomeSuggestionsPopup.IsOpen = false;
-            HomeSearchBox.Clear();
-            NavigateActiveTab(selected);
-        }
-        else if (e.Key == Key.Tab && HomeSuggestionsListBox.SelectedItem is string tabSel)
-        {
-            e.Handled = true;
-            HomeSearchBox.Text = tabSel;
-            HomeSearchBox.CaretIndex = tabSel.Length;
-            HomeSuggestionsPopup.IsOpen = false;
-            HomeSearchBox.Focus();
-        }
-    }
-
-    private void HomeSearchBox_LostFocus(object sender, RoutedEventArgs e)
-    {
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
-        {
-            if (!HomeSuggestionsListBox.IsKeyboardFocusWithin)
-            {
-                HomeSuggestionsPopup.IsOpen = false;
-            }
-        }));
-    }
-
     private void SuggestionsListBox_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         if (SuggestionsListBox.SelectedItem is string selected)
@@ -1428,11 +1458,13 @@ public partial class MainWindow : Window
         await GeminiWebView.EnsureCoreWebView2Async(env);
         if (GeminiWebView.CoreWebView2 is not null)
         {
-            await WebViewPrivacyService.ConfigureCoreWebViewAsync(
+            _geminiPrivacyController = await WebViewPrivacyService.ConfigureCoreWebViewAsync(
                 GeminiWebView.CoreWebView2,
                 () => ChkAdBlock.IsChecked == true,
                 () => ChkBlockCookies.IsChecked == true,
-                () => ChkFingerprint.IsChecked == true);
+                () => ChkFingerprint.IsChecked == true,
+                IsUrlCompatible,
+                initialUrl: "https://gemini.google.com/app");
             GeminiWebView.CoreWebView2.Navigate("https://gemini.google.com/app");
         }
     }
@@ -2761,62 +2793,6 @@ public partial class MainWindow : Window
 
     private void UrlTextBox_GotFocus(object sender, RoutedEventArgs e) => UrlTextBox.SelectAll();
 
-    private void BtnHomeSearch_Click(object sender, RoutedEventArgs e)
-    {
-        HomeSuggestionsPopup.IsOpen = false;
-        NavigateActiveTab(HomeSearchBox.Text);
-        HomeSearchBox.Clear();
-    }
-
-    private void HomeSearchBox_PreviewKeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Enter)
-        {
-            e.Handled = true;
-            HomeSuggestionsPopup.IsOpen = false;
-            NavigateActiveTab(HomeSearchBox.Text);
-            HomeSearchBox.Clear();
-        }
-        else if (e.Key == Key.Down && HomeSuggestionsPopup.IsOpen && HomeSuggestionsListBox.Items.Count > 0)
-        {
-            e.Handled = true;
-            var next = HomeSuggestionsListBox.SelectedIndex + 1;
-            if (next >= HomeSuggestionsListBox.Items.Count) next = 0;
-            HomeSuggestionsListBox.SelectedIndex = next;
-            if (HomeSuggestionsListBox.SelectedItem is string val)
-            {
-                HomeSuggestionsListBox.ScrollIntoView(val);
-                SetHomeSearchBoxText(val);
-                HomeSearchBox.CaretIndex = val.Length;
-            }
-        }
-        else if (e.Key == Key.Up && HomeSuggestionsPopup.IsOpen && HomeSuggestionsListBox.Items.Count > 0)
-        {
-            e.Handled = true;
-            var prev = HomeSuggestionsListBox.SelectedIndex - 1;
-            if (prev < 0) prev = HomeSuggestionsListBox.Items.Count - 1;
-            HomeSuggestionsListBox.SelectedIndex = prev;
-            if (HomeSuggestionsListBox.SelectedItem is string val)
-            {
-                HomeSuggestionsListBox.ScrollIntoView(val);
-                SetHomeSearchBoxText(val);
-                HomeSearchBox.CaretIndex = val.Length;
-            }
-        }
-        else if (e.Key == Key.Tab && HomeSuggestionsPopup.IsOpen && HomeSuggestionsListBox.Items.Count > 0)
-        {
-            e.Handled = true;
-            var first = (HomeSuggestionsListBox.SelectedItem ?? HomeSuggestionsListBox.Items[0])?.ToString() ?? string.Empty;
-            SetHomeSearchBoxText(first);
-            HomeSearchBox.CaretIndex = first.Length;
-            HomeSuggestionsPopup.IsOpen = false;
-        }
-        else if (e.Key == Key.Escape)
-        {
-            HomeSuggestionsPopup.IsOpen = false;
-        }
-    }
-
     private async void BtnSplitScreen_Click(object sender, RoutedEventArgs e)
     {
         if (_splitTab is not null)
@@ -2897,39 +2873,259 @@ public partial class MainWindow : Window
         }
     }
 
-    private void BtnFind_Click(object sender, RoutedEventArgs e)
+    private async void BtnFind_Click(object sender, RoutedEventArgs e)
     {
-        FindBar.Visibility = FindBar.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
-        if (FindBar.Visibility == Visibility.Visible)
+        await OpenFindUiAsync(toggleIfOpen: true);
+    }
+
+    private bool IsPdfTab(BrowserTabItem? tab)
+    {
+        if (tab is null || tab.IsHome) return false;
+        return tab.IsPdfDocument ||
+               WebViewPrivacyService.IsPdfUrl(tab.Url) ||
+               WebViewPrivacyService.IsPdfUrl(tab.WebView?.CoreWebView2?.Source);
+    }
+
+    private async Task OpenFindUiAsync(bool toggleIfOpen)
+    {
+        if (_activeTab?.WebView?.CoreWebView2 is null || _activeTab.IsHome) return;
+
+        if (IsPdfTab(_activeTab))
         {
-            FindTextBox.Focus();
-            FindTextBox.SelectAll();
+            StopActiveFindSession(hideFindBar: true);
+            await OpenNativePdfFindAsync(_activeTab.WebView.CoreWebView2, string.Empty);
+            _activeTab.WebView.Focus();
+            return;
+        }
+
+        if (toggleIfOpen && FindBar.Visibility == Visibility.Visible)
+        {
+            StopActiveFindSession(hideFindBar: true);
+            return;
+        }
+
+        FindBar.Visibility = Visibility.Visible;
+        FindTextBox.Focus();
+        FindTextBox.SelectAll();
+
+        if (!string.IsNullOrEmpty(FindTextBox.Text))
+        {
+            await ExecuteFindInPageAsync(forward: true, restartSession: true);
+        }
+        else
+        {
+            FindMatchCountText.Text = string.Empty;
         }
     }
 
-    private void BtnFindClose_Click(object sender, RoutedEventArgs e) => FindBar.Visibility = Visibility.Collapsed;
+    private async Task OpenNativePdfFindAsync(CoreWebView2 core, string initialTerm)
+    {
+        try
+        {
+            var options = core.Environment.CreateFindOptions();
+            options.FindTerm = initialTerm;
+            options.IsCaseSensitive = ChkFindCaseSensitive?.IsChecked == true;
+            options.ShouldHighlightAllMatches = true;
+            options.ShouldMatchWord = false;
+            options.SuppressDefaultFindDialog = false;
+            await core.Find.StartAsync(options);
+        }
+        catch { }
+    }
+
+    private void BtnFindClose_Click(object sender, RoutedEventArgs e)
+    {
+        StopActiveFindSession(hideFindBar: true);
+    }
+
+    private void StopActiveFindSession(bool hideFindBar)
+    {
+        _findDebounceCts?.Cancel();
+        _findDebounceCts?.Dispose();
+        _findDebounceCts = null;
+
+        try
+        {
+            _activeFindTab?.WebView?.CoreWebView2?.Find.Stop();
+        }
+        catch { }
+
+        if (_activeTab is not null && _activeTab != _activeFindTab && !IsPdfTab(_activeTab))
+        {
+            try
+            {
+                _activeTab.WebView?.CoreWebView2?.Find.Stop();
+            }
+            catch { }
+        }
+
+        _activeFindTab = null;
+        _lastFindQuery = string.Empty;
+        _isFindSessionActive = false;
+
+        if (FindMatchCountText is not null)
+        {
+            FindMatchCountText.Text = string.Empty;
+            FindMatchCountText.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+        }
+        if (hideFindBar && FindBar is not null)
+        {
+            FindBar.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void UpdateFindMatchCountDisplay(BrowserTabItem tab)
+    {
+        if (FindMatchCountText is null || tab != _activeTab || FindBar.Visibility != Visibility.Visible) return;
+        if (!_isFindSessionActive || string.IsNullOrEmpty(FindTextBox.Text))
+        {
+            FindMatchCountText.Text = string.Empty;
+            return;
+        }
+
+        var core = tab.WebView?.CoreWebView2;
+        if (core is null) return;
+
+        try
+        {
+            var total = core.Find.MatchCount;
+            var active = core.Find.ActiveMatchIndex;
+            if (total <= 0)
+            {
+                FindMatchCountText.Text = "0 / 0";
+                FindMatchCountText.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#EF4444"));
+            }
+            else
+            {
+                var displayIndex = active > 0 ? active : 1;
+                FindMatchCountText.Text = $"{displayIndex} / {total}";
+                FindMatchCountText.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+            }
+        }
+        catch { }
+    }
+
+    private async void FindTextBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (FindBar.Visibility != Visibility.Visible) return;
+
+        _findDebounceCts?.Cancel();
+        _findDebounceCts?.Dispose();
+        _findDebounceCts = new CancellationTokenSource();
+        var token = _findDebounceCts.Token;
+
+        var query = FindTextBox.Text;
+        if (string.IsNullOrEmpty(query))
+        {
+            StopActiveFindSession(hideFindBar: false);
+            return;
+        }
+
+        try
+        {
+            await Task.Delay(120, token);
+            if (token.IsCancellationRequested) return;
+            await ExecuteFindInPageAsync(forward: true, restartSession: true);
+        }
+        catch (TaskCanceledException) { }
+    }
+
+    private async void ChkFindCaseSensitive_Changed(object sender, RoutedEventArgs e)
+    {
+        if (FindBar.Visibility != Visibility.Visible || string.IsNullOrEmpty(FindTextBox.Text)) return;
+        await ExecuteFindInPageAsync(forward: true, restartSession: true);
+    }
 
     private async void FindTextBox_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter)
         {
+            e.Handled = true;
             var backward = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
-            await ExecuteFindInPageAsync(!backward);
+            await ExecuteFindInPageAsync(forward: !backward);
         }
-        else if (e.Key == Key.Escape) FindBar.Visibility = Visibility.Collapsed;
+        else if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            StopActiveFindSession(hideFindBar: true);
+        }
     }
 
-    private async void BtnFindNext_Click(object sender, RoutedEventArgs e) => await ExecuteFindInPageAsync(true);
-    private async void BtnFindPrev_Click(object sender, RoutedEventArgs e) => await ExecuteFindInPageAsync(false);
+    private async void BtnFindNext_Click(object sender, RoutedEventArgs e) => await ExecuteFindInPageAsync(forward: true);
+    private async void BtnFindPrev_Click(object sender, RoutedEventArgs e) => await ExecuteFindInPageAsync(forward: false);
 
-    private async Task ExecuteFindInPageAsync(bool forward)
+    private async Task ExecuteFindInPageAsync(bool forward, bool restartSession = false)
     {
         var query = FindTextBox.Text;
-        if (string.IsNullOrEmpty(query) || _activeTab?.WebView?.CoreWebView2 is null || _activeTab.IsHome) return;
+        if (_activeTab?.WebView?.CoreWebView2 is null || _activeTab.IsHome) return;
+        if (string.IsNullOrEmpty(query))
+        {
+            StopActiveFindSession(hideFindBar: false);
+            return;
+        }
 
-        var escaped = JsonSerializer.Serialize(query);
-        var backwardsJs = forward ? "false" : "true";
-        await _activeTab.WebView.CoreWebView2.ExecuteScriptAsync($"window.find({escaped}, false, {backwardsJs}, true);");
+        var core = _activeTab.WebView.CoreWebView2;
+
+        if (IsPdfTab(_activeTab))
+        {
+            StopActiveFindSession(hideFindBar: true);
+            await OpenNativePdfFindAsync(core, query);
+            _activeTab.WebView.Focus();
+            return;
+        }
+
+        var caseSensitive = ChkFindCaseSensitive?.IsChecked == true;
+        try
+        {
+            if (!restartSession &&
+                _isFindSessionActive &&
+                _activeFindTab == _activeTab &&
+                string.Equals(_lastFindQuery, query, StringComparison.Ordinal) &&
+                _lastFindCaseSensitive == caseSensitive)
+            {
+                if (forward)
+                    core.Find.FindNext();
+                else
+                    core.Find.FindPrevious();
+
+                UpdateFindMatchCountDisplay(_activeTab);
+                return;
+            }
+
+            if (_activeFindTab is not null && _activeFindTab != _activeTab)
+            {
+                try { _activeFindTab.WebView?.CoreWebView2?.Find.Stop(); } catch { }
+            }
+
+            var options = core.Environment.CreateFindOptions();
+            options.FindTerm = query;
+            options.IsCaseSensitive = caseSensitive;
+            options.ShouldHighlightAllMatches = true;
+            options.ShouldMatchWord = false;
+            options.SuppressDefaultFindDialog = true;
+
+            await core.Find.StartAsync(options);
+
+            _activeFindTab = _activeTab;
+            _lastFindQuery = query;
+            _lastFindCaseSensitive = caseSensitive;
+            _isFindSessionActive = true;
+
+            if (!forward && core.Find.MatchCount > 1)
+            {
+                core.Find.FindPrevious();
+            }
+
+            UpdateFindMatchCountDisplay(_activeTab);
+        }
+        catch
+        {
+            // Eski WebView2 çalışma zamanı yedek araması
+            var escaped = JsonSerializer.Serialize(query);
+            var backwardsJs = forward ? "false" : "true";
+            var caseJs = caseSensitive ? "true" : "false";
+            try { await core.ExecuteScriptAsync($"window.find({escaped}, {caseJs}, {backwardsJs}, true);"); } catch { }
+        }
     }
 
     private void AttachRichContextMenu(CoreWebView2 core, CoreWebView2ContextMenuRequestedEventArgs args)
@@ -2996,6 +3192,23 @@ public partial class MainWindow : Window
         var shotItem = env.CreateContextMenuItem("📷 Sayfa Ekran Görüntüsü", null, CoreWebView2ContextMenuItemKind.Command);
         shotItem.CustomItemSelected += (_, _) => Dispatcher.BeginInvoke(() => BtnScreenshot_Click(this, new RoutedEventArgs()));
         menuItems.Add(shotItem);
+
+        var currentPageUrl = core.Source;
+        if (IsHttpOrHttpsUrl(currentPageUrl))
+        {
+            var isCompat = IsUrlCompatible(currentPageUrl);
+            var shieldLabel = isCompat
+                ? "🛡️ Bu Site İçin Kalkanı Tekrar Aç"
+                : "🔓 Bu Site İçin Kalkanı Kapat (Uyumluluk Modu)";
+            var shieldItem = env.CreateContextMenuItem(shieldLabel, null, CoreWebView2ContextMenuItemKind.Command);
+            shieldItem.CustomItemSelected += (_, _) => Dispatcher.BeginInvoke(() => _ = ToggleSiteCompatibilityForUrlAsync(currentPageUrl, _activeTab));
+            menuItems.Add(env.CreateContextMenuItem(string.Empty, null, CoreWebView2ContextMenuItemKind.Separator));
+            menuItems.Add(shieldItem);
+
+            var extItem = env.CreateContextMenuItem("↗️ Bu Sayfayı Varsayılan Tarayıcıda Aç", null, CoreWebView2ContextMenuItemKind.Command);
+            extItem.CustomItemSelected += (_, _) => Dispatcher.BeginInvoke(() => OpenUrlInDefaultBrowser(currentPageUrl));
+            menuItems.Add(extItem);
+        }
     }
 
     private async Task TranslateAndShowAsync(string text, string targetLang)
@@ -3159,11 +3372,12 @@ public partial class MainWindow : Window
         await SidebarWebView.EnsureCoreWebView2Async(env);
         if (SidebarWebView.CoreWebView2 is not null)
         {
-            await WebViewPrivacyService.ConfigureCoreWebViewAsync(
+            _sidebarPrivacyController = await WebViewPrivacyService.ConfigureCoreWebViewAsync(
                 SidebarWebView.CoreWebView2,
                 () => ChkAdBlock.IsChecked == true,
                 () => ChkBlockCookies.IsChecked == true,
-                () => ChkFingerprint.IsChecked == true);
+                () => ChkFingerprint.IsChecked == true,
+                IsUrlCompatible);
         }
     }
 
@@ -3423,6 +3637,17 @@ public partial class MainWindow : Window
             new("✨ Gemini Asistan Panelini Aç", () => _ = EnsureGeminiPanelOpenAsync())
         };
 
+        if (_activeTab is not null && !_activeTab.IsHome && IsHttpOrHttpsUrl(_activeTab.Url))
+        {
+            var activeUrl = _activeTab.Url;
+            var activeTabRef = _activeTab;
+            var compatLabel = IsUrlCompatible(activeUrl)
+                ? "🛡️ Aktif Site İçin Kalkanı Tekrar Aç"
+                : "🔓 Aktif Site İçin Uyumluluk Modunu Aç (Kalkanı Kapat)";
+            all.Insert(0, new CommandPaletteEntry(compatLabel, () => _ = ToggleSiteCompatibilityForUrlAsync(activeUrl, activeTabRef)));
+            all.Insert(1, new CommandPaletteEntry("↗️ Aktif Sayfayı Varsayılan Tarayıcıda Aç", () => OpenUrlInDefaultBrowser(activeUrl)));
+        }
+
         foreach (var tab in _tabs)
         {
             var t = tab;
@@ -3535,6 +3760,185 @@ public partial class MainWindow : Window
     {
         if (_isInitializingSession) return;
         SaveCurrentSessionState();
+        _ = RefreshAllWebViewPoliciesAsync();
+    }
+
+    private bool IsUrlCompatible(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return false;
+        lock (_compatibleDomainsSync)
+        {
+            return WebViewPrivacyService.IsUrlInDomains(url, _sessionData.CompatibleDomains);
+        }
+    }
+
+    private void RefreshCompatibleDomainsUi()
+    {
+        List<string> normalized;
+        lock (_compatibleDomainsSync)
+        {
+            normalized = _sessionData.CompatibleDomains
+                .Select(WebViewPrivacyService.NormalizeSiteKey)
+                .Where(d => !string.IsNullOrEmpty(d))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(d => d, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            _sessionData.CompatibleDomains = normalized;
+        }
+
+        _compatibleDomains.Clear();
+        foreach (var domain in normalized) _compatibleDomains.Add(domain);
+
+        if (CompatibleDomainsEmptyText is not null)
+        {
+            CompatibleDomainsEmptyText.Visibility = _compatibleDomains.Count == 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+    }
+
+    private void UpdateSiteShieldAndExternalButtons()
+    {
+        if (BtnSiteShield is null || BtnOpenExternal is null) return;
+
+        if (_activeTab is null || _activeTab.IsHome || !IsHttpOrHttpsUrl(_activeTab.Url))
+        {
+            BtnSiteShield.Visibility = Visibility.Collapsed;
+            BtnOpenExternal.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var siteKey = WebViewPrivacyService.NormalizeSiteKey(_activeTab.Url);
+        if (string.IsNullOrEmpty(siteKey))
+        {
+            BtnSiteShield.Visibility = Visibility.Collapsed;
+            BtnOpenExternal.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        BtnOpenExternal.Visibility = Visibility.Visible;
+        BtnSiteShield.Visibility = Visibility.Visible;
+
+        var isCompat = IsUrlCompatible(_activeTab.Url);
+        if (isCompat)
+        {
+            BtnSiteShield.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#D97706"));
+            SiteShieldText.Text = "🔓 Uyumlu";
+            BtnSiteShield.ToolTip = $"Uyumluluk Modu Aktif ({siteKey})\nReklam engelleyici, çerez silme ve özel scriptler bu sitede kapalı.\nKalkanı tekrar açmak için tıklayın.";
+        }
+        else
+        {
+            BtnSiteShield.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#059669"));
+            SiteShieldText.Text = "🛡️";
+            BtnSiteShield.ToolTip = $"Kalkan Açık ({siteKey})\nSite erişim engeli veriyorsa tıklayıp Uyumluluk Modu'na geçin.";
+        }
+    }
+
+    private async void BtnSiteShield_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeTab is null || _activeTab.IsHome || !IsHttpOrHttpsUrl(_activeTab.Url)) return;
+        await ToggleSiteCompatibilityForUrlAsync(_activeTab.Url, _activeTab);
+    }
+
+    private async Task ToggleSiteCompatibilityForUrlAsync(string? url, BrowserTabItem? tabToReload)
+    {
+        var siteKey = WebViewPrivacyService.NormalizeSiteKey(url);
+        if (string.IsNullOrEmpty(siteKey)) return;
+
+        lock (_compatibleDomainsSync)
+        {
+            var existingIdx = _sessionData.CompatibleDomains.FindIndex(
+                d => string.Equals(d, siteKey, StringComparison.OrdinalIgnoreCase));
+            if (existingIdx >= 0)
+            {
+                _sessionData.CompatibleDomains.RemoveAt(existingIdx);
+            }
+            else
+            {
+                _sessionData.CompatibleDomains.Add(siteKey);
+            }
+        }
+
+        RefreshCompatibleDomainsUi();
+        UpdateSiteShieldAndExternalButtons();
+        SaveCurrentSessionState();
+        await RefreshAllWebViewPoliciesAsync();
+
+        if (tabToReload?.WebView?.CoreWebView2 is not null && !tabToReload.IsHome)
+        {
+            tabToReload.WebView.CoreWebView2.Reload();
+        }
+    }
+
+    private async void BtnRemoveCompatibleDomain_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn || btn.Tag is not string domain) return;
+
+        lock (_compatibleDomainsSync)
+        {
+            _sessionData.CompatibleDomains.RemoveAll(
+                d => string.Equals(d, domain, StringComparison.OrdinalIgnoreCase));
+        }
+
+        RefreshCompatibleDomainsUi();
+        UpdateSiteShieldAndExternalButtons();
+        SaveCurrentSessionState();
+        await RefreshAllWebViewPoliciesAsync();
+
+        if (_activeTab?.WebView?.CoreWebView2 is not null &&
+            !_activeTab.IsHome &&
+            Uri.TryCreate(_activeTab.Url, UriKind.Absolute, out var uri) &&
+            WebViewPrivacyService.IsHostOrSubdomain(uri.Host, domain))
+        {
+            _activeTab.WebView.CoreWebView2.Reload();
+        }
+    }
+
+    private async Task RefreshAllWebViewPoliciesAsync()
+    {
+        var tasks = new List<Task>();
+        foreach (var tab in _tabs.ToList())
+        {
+            if (tab.PrivacyController is not null)
+            {
+                tasks.Add(tab.PrivacyController.RefreshPolicyAsync());
+            }
+        }
+        if (_sidebarPrivacyController is not null)
+        {
+            tasks.Add(_sidebarPrivacyController.RefreshPolicyAsync());
+        }
+        if (_geminiPrivacyController is not null)
+        {
+            tasks.Add(_geminiPrivacyController.RefreshPolicyAsync());
+        }
+        if (tasks.Count > 0)
+        {
+            await Task.WhenAll(tasks);
+        }
+    }
+
+    private void BtnOpenExternal_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeTab is null || _activeTab.IsHome) return;
+        OpenUrlInDefaultBrowser(_activeTab.Url);
+    }
+
+    private static void OpenUrlInDefaultBrowser(string? url)
+    {
+        if (!IsHttpOrHttpsUrl(url)) return;
+        try
+        {
+            Process.Start(new ProcessStartInfo(url!.Trim()) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                $"Varsayılan tarayıcı açılamadı:\n{ex.Message}",
+                "Özel Tarayıcı",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
     }
 
     private void ChkRunOnStartup_Changed(object sender, RoutedEventArgs e)
@@ -3822,7 +4226,7 @@ public partial class MainWindow : Window
         else if (ctrl && !shift && !alt && e.Key == Key.F)
         {
             e.Handled = true;
-            BtnFind_Click(sender, e);
+            await OpenFindUiAsync(toggleIfOpen: false);
         }
         else if (ctrl && !shift && !alt && (e.Key == Key.OemPlus || e.Key == Key.Add))
         {
@@ -3852,6 +4256,10 @@ public partial class MainWindow : Window
         _sessionData.Reminders = _reminders.ToList();
         _sessionData.StickyNotes = _notes.ToList();
         _sessionData.SidebarApps = _sidebarApps.ToList();
+        lock (_compatibleDomainsSync)
+        {
+            _sessionData.CompatibleDomains = _compatibleDomains.ToList();
+        }
         _sessionData.RememberTabs = ChkRememberTabs.IsChecked == true;
         _sessionData.IsAdBlockEnabled = ChkAdBlock.IsChecked == true;
         _sessionData.IsAntiFingerprintEnabled = ChkFingerprint.IsChecked == true;
@@ -3920,6 +4328,7 @@ public partial class MainWindow : Window
                 try { tab.WebView.Dispose(); } catch { }
                 tab.WebView = null;
             }
+            tab.PrivacyController = null;
         }
         try { SidebarWebView.Dispose(); } catch { }
         try { GeminiWebView.Dispose(); } catch { }
@@ -3938,8 +4347,7 @@ public partial class MainWindow : Window
     private void CloseAllOverlaysAndPopups()
     {
         SuggestionsPopup.IsOpen = false;
-        HomeSuggestionsPopup.IsOpen = false;
-        FindBar.Visibility = Visibility.Collapsed;
+        StopActiveFindSession(hideFindBar: true);
         SettingsDrawer.Visibility = Visibility.Collapsed;
         HistoryDownloadsDrawer.Visibility = Visibility.Collapsed;
         GroupModalOverlay.Visibility = Visibility.Collapsed;

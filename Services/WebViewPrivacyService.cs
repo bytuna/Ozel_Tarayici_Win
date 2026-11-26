@@ -3,11 +3,204 @@ using Microsoft.Web.WebView2.Core;
 
 namespace OzelTarayici.Services;
 
+public sealed class WebViewPrivacyController
+{
+    private readonly CoreWebView2 _core;
+    private readonly Func<bool> _isAdBlockEnabled;
+    private readonly Func<bool> _isBlockAllCookies;
+    private readonly Func<bool> _isTrackingPreventionEnabled;
+    private readonly Func<string, bool> _isCompatibleUrl;
+    private readonly bool _isIncognito;
+
+    private readonly SemaphoreSlim _syncLock = new(1, 1);
+    private string? _shortcutScriptId;
+    private string? _passwordScriptId;
+    private string? _cosmeticAdBlockScriptId;
+    private volatile string _currentNavigationUrl = string.Empty;
+
+    internal WebViewPrivacyController(
+        CoreWebView2 core,
+        Func<bool> isAdBlockEnabled,
+        Func<bool> isBlockAllCookies,
+        Func<bool> isTrackingPreventionEnabled,
+        Func<string, bool> isCompatibleUrl,
+        bool isIncognito)
+    {
+        _core = core;
+        _isAdBlockEnabled = isAdBlockEnabled;
+        _isBlockAllCookies = isBlockAllCookies;
+        _isTrackingPreventionEnabled = isTrackingPreventionEnabled;
+        _isCompatibleUrl = isCompatibleUrl;
+        _isIncognito = isIncognito;
+    }
+
+    internal void HandleNavigationStarting(string? uri)
+    {
+        _currentNavigationUrl = uri ?? string.Empty;
+        ApplyFastSyncSettings(_currentNavigationUrl);
+        _ = SyncScriptsAndSettingsAsync(_currentNavigationUrl);
+    }
+
+    internal bool IsCurrentPageCompatible()
+    {
+        var url = !string.IsNullOrWhiteSpace(_currentNavigationUrl)
+            ? _currentNavigationUrl
+            : (_core.Source ?? string.Empty);
+        return _isCompatibleUrl(url);
+    }
+
+    public Task PrepareForNavigationAsync(string? targetUrl)
+    {
+        _currentNavigationUrl = targetUrl ?? string.Empty;
+        return SyncScriptsAndSettingsAsync(_currentNavigationUrl);
+    }
+
+    public Task RefreshPolicyAsync(string? overrideUrl = null)
+    {
+        var url = overrideUrl ?? (!string.IsNullOrWhiteSpace(_core.Source) ? _core.Source : _currentNavigationUrl);
+        return SyncScriptsAndSettingsAsync(url);
+    }
+
+    private void ApplyFastSyncSettings(string? targetUrl)
+    {
+        try
+        {
+            var compatible = !string.IsNullOrWhiteSpace(targetUrl) && _isCompatibleUrl(targetUrl);
+            var isPdf = WebViewPrivacyService.IsPdfUrl(targetUrl);
+
+            _core.Settings.AreHostObjectsAllowed = false;
+            _core.Settings.IsWebMessageEnabled = !compatible;
+            _core.Settings.AreBrowserAcceleratorKeysEnabled = compatible || isPdf;
+
+            if (compatible)
+            {
+                RemoveScriptIfPresent(ref _shortcutScriptId);
+                RemoveScriptIfPresent(ref _passwordScriptId);
+                RemoveScriptIfPresent(ref _cosmeticAdBlockScriptId);
+            }
+        }
+        catch
+        {
+            // WebView kapanıyorsa sessizce geç
+        }
+    }
+
+    public async Task SyncScriptsAndSettingsAsync(string? targetUrl)
+    {
+        await _syncLock.WaitAsync();
+        try
+        {
+            var url = targetUrl ?? string.Empty;
+            var compatible = !string.IsNullOrWhiteSpace(url) && _isCompatibleUrl(url);
+            var isPdf = WebViewPrivacyService.IsPdfUrl(url);
+
+            _core.Settings.IsStatusBarEnabled = false;
+            _core.Settings.AreDefaultContextMenusEnabled = true;
+            _core.Settings.AreHostObjectsAllowed = false;
+            _core.Settings.IsWebMessageEnabled = !compatible;
+            _core.Settings.AreBrowserAcceleratorKeysEnabled = compatible || isPdf;
+
+            try
+            {
+                _core.Profile.PreferredTrackingPreventionLevel = _isTrackingPreventionEnabled()
+                    ? CoreWebView2TrackingPreventionLevel.Balanced
+                    : CoreWebView2TrackingPreventionLevel.Basic;
+            }
+            catch
+            {
+                // Eski WebView2 çalışma zamanı desteklemiyorsa geç
+            }
+
+            if (compatible)
+            {
+                RemoveScriptIfPresent(ref _shortcutScriptId);
+                RemoveScriptIfPresent(ref _passwordScriptId);
+                RemoveScriptIfPresent(ref _cosmeticAdBlockScriptId);
+                return;
+            }
+
+            if (_shortcutScriptId is null)
+            {
+                var id = await _core.AddScriptToExecuteOnDocumentCreatedAsync(
+                    WebViewPrivacyService.KeyboardShortcutScript);
+                if (_isCompatibleUrl(_currentNavigationUrl))
+                {
+                    RemoveScriptIdSafe(id);
+                    return;
+                }
+                _shortcutScriptId = id;
+            }
+
+            if (!_isIncognito)
+            {
+                if (_passwordScriptId is null)
+                {
+                    var id = await _core.AddScriptToExecuteOnDocumentCreatedAsync(
+                        WebViewPrivacyService.PasswordCaptureScript);
+                    if (_isCompatibleUrl(_currentNavigationUrl))
+                    {
+                        RemoveScriptIdSafe(id);
+                        return;
+                    }
+                    _passwordScriptId = id;
+                }
+            }
+            else
+            {
+                RemoveScriptIfPresent(ref _passwordScriptId);
+            }
+
+            if (_isAdBlockEnabled())
+            {
+                if (_cosmeticAdBlockScriptId is null)
+                {
+                    var id = await _core.AddScriptToExecuteOnDocumentCreatedAsync(
+                        WebViewPrivacyService.CosmeticAdBlockScript);
+                    if (_isCompatibleUrl(_currentNavigationUrl))
+                    {
+                        RemoveScriptIdSafe(id);
+                        return;
+                    }
+                    _cosmeticAdBlockScriptId = id;
+                }
+            }
+            else
+            {
+                RemoveScriptIfPresent(ref _cosmeticAdBlockScriptId);
+            }
+        }
+        catch
+        {
+            // WebView kapanmış veya geçersiz durumda olabilir
+        }
+        finally
+        {
+            _syncLock.Release();
+        }
+    }
+
+    private void RemoveScriptIfPresent(ref string? scriptId)
+    {
+        var id = Interlocked.Exchange(ref scriptId, null);
+        if (id is null) return;
+        RemoveScriptIdSafe(id);
+    }
+
+    private void RemoveScriptIdSafe(string id)
+    {
+        try
+        {
+            _core.RemoveScriptToExecuteOnDocumentCreated(id);
+        }
+        catch
+        {
+            // Zaten kaldırılmış olabilir
+        }
+    }
+}
+
 public static class WebViewPrivacyService
 {
-    public const string DefaultChromeUserAgent =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
-
     private static readonly string[] BlockedDomains =
     [
         "doubleclick.net",
@@ -61,14 +254,11 @@ public static class WebViewPrivacyService
         "recaptcha.net"
     ];
 
-    public const string AntiFingerprintAndStealthScript = """
+    public const string KeyboardShortcutScript = """
         (() => {
           try {
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined, configurable: true });
-            if (!window.chrome) {
-              window.chrome = { runtime: {} };
-            }
-
+            if (window.__ozelShortcutHooked) return;
+            window.__ozelShortcutHooked = true;
             window.addEventListener('keydown', (e) => {
               if (e.ctrlKey && !e.shiftKey && !e.altKey) {
                 const k = (e.key || '').toLowerCase();
@@ -92,6 +282,8 @@ public static class WebViewPrivacyService
     public const string PasswordCaptureScript = """
         (() => {
           try {
+            if (window.__ozelPwdCaptureHooked) return;
+            window.__ozelPwdCaptureHooked = true;
             const captureFormCreds = (root) => {
               try {
                 const passEl = (root || document).querySelector('input[type="password"]');
@@ -133,57 +325,6 @@ public static class WebViewPrivacyService
               }
             `;
             (document.head || document.documentElement).appendChild(style);
-          } catch {}
-        })();
-        """;
-
-    public const string StrongFingerprintShieldScript = """
-        (() => {
-          try {
-            if (window.__ozelFpShieldApplied) return;
-            window.__ozelFpShieldApplied = true;
-
-            const noise = Math.floor(Math.random() * 3) + 1;
-
-            // 1. Canvas toDataURL & getImageData gürültüsü
-            const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-            HTMLCanvasElement.prototype.toDataURL = function(...args) {
-              try {
-                const ctx = this.getContext('2d');
-                if (ctx && this.width > 0 && this.height > 0) {
-                  const img = ctx.getImageData(0, 0, 1, 1);
-                  img.data[0] = (img.data[0] ^ noise) & 255;
-                  ctx.putImageData(img, 0, 0);
-                }
-              } catch {}
-              return origToDataURL.apply(this, args);
-            };
-
-            const origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
-            CanvasRenderingContext2D.prototype.getImageData = function(sx, sy, sw, sh) {
-              const data = origGetImageData.apply(this, [sx, sy, sw, sh]);
-              if (data && data.data && data.data.length > 0) {
-                data.data[0] = (data.data[0] ^ noise) & 255;
-              }
-              return data;
-            };
-
-            // 2. WebGL Vendor & Renderer maskeleme
-            const patchWebGL = (proto) => {
-              if (!proto || !proto.getParameter) return;
-              const origGetParam = proto.getParameter;
-              proto.getParameter = function(param) {
-                if (param === 37445) return 'Intel Inc.';
-                if (param === 37446) return 'Intel Iris OpenGL Engine';
-                return origGetParam.apply(this, [param]);
-              };
-            };
-            patchWebGL(window.WebGLRenderingContext && WebGLRenderingContext.prototype);
-            patchWebGL(window.WebGL2RenderingContext && WebGL2RenderingContext.prototype);
-
-            // 3. Donanım sabitleme
-            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8, configurable: true });
-            Object.defineProperty(navigator, 'deviceMemory', { get: () => 8, configurable: true });
           } catch {}
         })();
         """;
@@ -283,56 +424,61 @@ public static class WebViewPrivacyService
         })();
         """;
 
-    public static async Task ConfigureCoreWebViewAsync(
+    public static async Task<WebViewPrivacyController> ConfigureCoreWebViewAsync(
         CoreWebView2 core,
         Func<bool> isAdBlockEnabled,
         Func<bool> isBlockAllCookies,
-        Func<bool> isAntiFingerprintEnabled,
-        bool isIncognito = false)
+        Func<bool> isTrackingPreventionEnabled,
+        Func<string, bool> isCompatibleUrl,
+        bool isIncognito = false,
+        string? initialUrl = null)
     {
-        core.Settings.IsStatusBarEnabled = false;
-        core.Settings.AreDefaultContextMenusEnabled = true;
-        core.Settings.AreBrowserAcceleratorKeysEnabled = false;
+        var controller = new WebViewPrivacyController(
+            core,
+            isAdBlockEnabled,
+            isBlockAllCookies,
+            isTrackingPreventionEnabled,
+            isCompatibleUrl,
+            isIncognito);
 
-        await core.AddScriptToExecuteOnDocumentCreatedAsync(AntiFingerprintAndStealthScript);
-        if (!isIncognito)
+        await controller.PrepareForNavigationAsync(initialUrl);
+
+        core.NavigationStarting += (_, args) =>
         {
-            await core.AddScriptToExecuteOnDocumentCreatedAsync(PasswordCaptureScript);
-        }
-        if (isAdBlockEnabled())
-        {
-            await core.AddScriptToExecuteOnDocumentCreatedAsync(CosmeticAdBlockScript);
-        }
-        if (isAntiFingerprintEnabled())
-        {
-            await core.AddScriptToExecuteOnDocumentCreatedAsync(StrongFingerprintShieldScript);
-        }
+            controller.HandleNavigationStarting(args.Uri);
+        };
 
         core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.Script);
         core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.Image);
         core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.Document);
         core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.XmlHttpRequest);
         core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.Fetch);
-        core.WebResourceRequested += (sender, args) =>
+        core.WebResourceRequested += (_, args) =>
         {
             if (!isAdBlockEnabled()) return;
+            if (controller.IsCurrentPageCompatible()) return;
+
             var url = args.Request.Uri ?? string.Empty;
+            if (isCompatibleUrl(url)) return;
+
             if (ShouldBlockUrl(url))
             {
                 args.Response = core.Environment.CreateWebResourceResponse(
-                    Stream.Null, 403, "Blocked by OzelTarayici", "Content-Type: text/plain");
+                    Stream.Null, 403, "Forbidden", "Content-Type: text/plain");
             }
         };
 
         core.NavigationCompleted += async (_, _) =>
         {
-            if (isAdBlockEnabled())
+            var currentUrl = core.Source ?? string.Empty;
+            var isCompatible = isCompatibleUrl(currentUrl);
+
+            if (isAdBlockEnabled() && !isCompatible)
             {
                 try { await core.ExecuteScriptAsync(CosmeticAdBlockScript); } catch { }
             }
 
-            if (!isBlockAllCookies()) return;
-            var currentUrl = core.Source ?? string.Empty;
+            if (!isBlockAllCookies() || isCompatible) return;
             if (!Uri.TryCreate(currentUrl, UriKind.Absolute, out var currentUri)) return;
             var host = currentUri.Host;
             if (IsHostOrSubdomain(host, "google.com") ||
@@ -367,6 +513,61 @@ public static class WebViewPrivacyService
                 args.Action = CoreWebView2ServerCertificateErrorAction.Default;
             }
         };
+
+        return controller;
+    }
+
+    public static bool IsPdfUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return false;
+        if (Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri))
+        {
+            return uri.AbsolutePath.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase);
+        }
+        return false;
+    }
+
+    public static string NormalizeSiteKey(string? urlOrHost)
+    {
+        if (string.IsNullOrWhiteSpace(urlOrHost)) return string.Empty;
+        var raw = urlOrHost.Trim();
+        string host;
+        if (Uri.TryCreate(raw, UriKind.Absolute, out var uri) &&
+            (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+        {
+            host = uri.Host;
+        }
+        else if (!raw.Contains("://", StringComparison.Ordinal) &&
+                 Uri.TryCreate("https://" + raw, UriKind.Absolute, out var fallbackUri))
+        {
+            host = fallbackUri.Host;
+        }
+        else
+        {
+            return string.Empty;
+        }
+
+        host = host.Trim().TrimEnd('.').ToLowerInvariant();
+        if (host.StartsWith("www.", StringComparison.Ordinal) && host.IndexOf('.', 4) > 0)
+        {
+            host = host[4..];
+        }
+        return host;
+    }
+
+    public static bool IsUrlInDomains(string? url, IEnumerable<string> domains)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return false;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
+        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) return false;
+
+        var host = uri.Host;
+        foreach (var domain in domains)
+        {
+            if (IsHostOrSubdomain(host, domain))
+                return true;
+        }
+        return false;
     }
 
     public static bool IsHostOrSubdomain(string host, string domain)

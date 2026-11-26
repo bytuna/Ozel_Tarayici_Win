@@ -97,17 +97,17 @@
             <Setter Property="Background" Value="{DynamicResource BarBgBrush}"/>
             <Setter Property="BorderBrush" Value="{DynamicResource BorderBrushSubtle}"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="14"/>
-            <Setter Property="Padding" Value="16"/>
+            <Setter Property="CornerRadius" Value="16"/>
+            <Setter Property="Padding" Value="22"/>
         </Style>
 
         <Style x:Key="PrayerChip" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource SurfaceBgBrush}"/>
             <Setter Property="BorderBrush" Value="{DynamicResource BorderBrushSubtle}"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="8"/>
-            <Setter Property="Padding" Value="8,6"/>
-            <Setter Property="Margin" Value="3"/>
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Padding" Value="12,9"/>
+            <Setter Property="Margin" Value="4"/>
         </Style>
 
         <!-- Flu Yer Tutucu (Placeholder) TextBox Stili -->
@@ -602,9 +602,27 @@
                                     </LinearGradientBrush>
                                 </Button.Background>
                             </Button>
+                            <Button DockPanel.Dock="Right" x:Name="BtnOpenExternal" Style="{StaticResource IconToolButton}" Padding="7,4" Margin="0,3,2,3" ToolTip="Bu Sayfayı Varsayılan Tarayıcıda Aç (Edge / Chrome)" Click="BtnOpenExternal_Click" Visibility="Collapsed">
+                                <Path Data="M10,2 H14 V6 M14,2 L7,9 M12,9 V13 H3 V4 H7" Stroke="{DynamicResource TextSecondaryBrush}" StrokeThickness="1.5" Width="13" Height="13" Stretch="Uniform"/>
+                            </Button>
                             <Border DockPanel.Dock="Left" x:Name="IncognitoBadge" Background="#7C3AED" CornerRadius="6" Padding="8,2" Margin="4,3,0,3" Visibility="Collapsed">
                                 <TextBlock Text="🕶️ Gizli" Foreground="White" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
                             </Border>
+                            <Button DockPanel.Dock="Left" x:Name="BtnSiteShield" Cursor="Hand" BorderThickness="0" Padding="0" Margin="4,3,0,3" Click="BtnSiteShield_Click" Visibility="Collapsed" ToolTip="Site Kalkanı">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="ShieldBadgeBorder" Background="{TemplateBinding Background}" CornerRadius="6" Padding="7,3">
+                                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="ShieldBadgeBorder" Property="Opacity" Value="0.86"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                                <TextBlock x:Name="SiteShieldText" Text="🛡️" FontSize="11.5" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center"/>
+                            </Button>
                             <TextBlock DockPanel.Dock="Right" x:Name="LoadingBadge" Text="⏳" VerticalAlignment="Center" Margin="4,0" Visibility="Collapsed"/>
                             <TextBox x:Name="UrlTextBox"
                                      Tag="Adres yazın veya Google'da arayın..."
@@ -789,13 +807,15 @@
             </Border>
 
             <Border x:Name="FindBar" Background="{DynamicResource SurfaceBgBrush}" BorderBrush="{DynamicResource BorderBrushSubtle}" BorderThickness="0,0,0,1" Padding="10,6" Visibility="Collapsed">
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <TextBlock Text="Sayfada Bul:" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12"/>
-                <TextBox x:Name="FindTextBox" Width="220" Padding="6,3" Background="{DynamicResource AppBgBrush}" Foreground="{DynamicResource TextPrimaryBrush}" BorderBrush="{DynamicResource BorderBrushSubtle}" KeyDown="FindTextBox_KeyDown"/>
-                <Button Style="{StaticResource IconToolButton}" Content="▲" ToolTip="Önceki" Click="BtnFindPrev_Click"/>
-                <Button Style="{StaticResource IconToolButton}" Content="▼" ToolTip="Sonraki" Click="BtnFindNext_Click"/>
-                <Button Style="{StaticResource IconToolButton}" Content="✕" ToolTip="Kapat (Esc)" Click="BtnFindClose_Click"/>
-            </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <TextBlock Text="Sayfada Bul:" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12"/>
+                    <TextBox x:Name="FindTextBox" Width="230" Padding="6,3" Background="{DynamicResource AppBgBrush}" Foreground="{DynamicResource TextPrimaryBrush}" CaretBrush="{DynamicResource TextPrimaryBrush}" BorderBrush="{DynamicResource BorderBrushSubtle}" TextChanged="FindTextBox_TextChanged" KeyDown="FindTextBox_KeyDown"/>
+                    <TextBlock x:Name="FindMatchCountText" Text="" MinWidth="48" TextAlignment="Center" VerticalAlignment="Center" Margin="6,0" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11.5" FontWeight="SemiBold"/>
+                    <CheckBox x:Name="ChkFindCaseSensitive" Content="Aa" ToolTip="Büyük/Küçük Harf Duyarlı" VerticalAlignment="Center" Margin="2,0,6,0" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11.5" Checked="ChkFindCaseSensitive_Changed" Unchecked="ChkFindCaseSensitive_Changed"/>
+                    <Button Style="{StaticResource IconToolButton}" Content="▲" ToolTip="Önceki (Shift+Enter)" Click="BtnFindPrev_Click"/>
+                    <Button Style="{StaticResource IconToolButton}" Content="▼" ToolTip="Sonraki (Enter)" Click="BtnFindNext_Click"/>
+                    <Button Style="{StaticResource IconToolButton}" Content="✕" ToolTip="Kapat (Esc)" Click="BtnFindClose_Click"/>
+                </StackPanel>
             </Border>
         </StackPanel>
 
@@ -903,10 +923,10 @@
 
                 <!-- NATIVE ANA SAYFA DASHBOARD -->
                 <ScrollViewer x:Name="HomePageOverlay" Background="{DynamicResource AppBgBrush}" VerticalScrollBarVisibility="Auto" Visibility="Visible">
-                    <StackPanel MaxWidth="1160" Margin="24,18,24,32">
+                    <StackPanel MaxWidth="1680" Margin="32,24,32,36">
 
                         <!-- ÜST HERO KARTI: HAVA DURUMU + LED DİJİTAL SAAT + EZAN VAKİTLERİ -->
-                        <Border Style="{StaticResource DashboardCard}" Margin="0,0,0,16">
+                        <Border Style="{StaticResource DashboardCard}" Margin="0,0,0,22">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="1.1*"/>
@@ -915,19 +935,19 @@
                                 </Grid.ColumnDefinitions>
 
                                 <!-- Sol: Konum ve Hava Durumu -->
-                                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
-                                    <Button x:Name="BtnChangeLocation" Style="{StaticResource PillActionButton}" HorizontalAlignment="Left" Click="BtnChangeLocation_Click" Margin="0,0,0,10">
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                    <Button x:Name="BtnChangeLocation" Style="{StaticResource PillActionButton}" Padding="12,6" HorizontalAlignment="Left" Click="BtnChangeLocation_Click" Margin="0,0,0,12">
                                         <StackPanel Orientation="Horizontal">
-                                            <TextBlock x:Name="WeatherLocationText" Text="📍 İstanbul, Kadıköy" FontWeight="SemiBold"/>
-                                            <TextBlock Text=" ✏️" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                            <TextBlock x:Name="WeatherLocationText" Text="📍 İstanbul, Kadıköy" FontSize="14" FontWeight="SemiBold"/>
+                                            <TextBlock Text=" ✏️" FontSize="13.5" Foreground="{DynamicResource TextSecondaryBrush}"/>
                                         </StackPanel>
                                     </Button>
-                                    <Border Background="{DynamicResource SurfaceBgBrush}" CornerRadius="10" Padding="12,10" HorizontalAlignment="Left">
+                                    <Border Background="{DynamicResource SurfaceBgBrush}" CornerRadius="12" Padding="18,14" HorizontalAlignment="Left">
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                            <TextBlock x:Name="WeatherIconText" Text="⛅" FontSize="38" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                            <TextBlock x:Name="WeatherIconText" Text="⛅" FontSize="48" VerticalAlignment="Center" Margin="0,0,16,0"/>
                                             <StackPanel VerticalAlignment="Center">
-                                                <TextBlock x:Name="WeatherTempText" Text="--°C" FontSize="26" FontWeight="Bold"/>
-                                                <TextBlock x:Name="WeatherDescText" Text="Yükleniyor..." FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                                <TextBlock x:Name="WeatherTempText" Text="--°C" FontSize="34" FontWeight="Bold"/>
+                                                <TextBlock x:Name="WeatherDescText" Text="Yükleniyor..." FontSize="14.5" Foreground="{DynamicResource TextSecondaryBrush}"/>
                                             </StackPanel>
                                         </StackPanel>
                                     </Border>
@@ -935,59 +955,59 @@
 
                                 <!-- Orta: LED 7-Segment Tarzı Dijital Saat & Tarih -->
                                 <StackPanel Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Center">
-                                    <Border Background="{DynamicResource ClockDisplayBgBrush}" BorderBrush="{DynamicResource BorderBrushSubtle}" BorderThickness="1" CornerRadius="12" Padding="22,10">
-                                        <TextBlock x:Name="ClockTimeText" Text="00:00:00" FontSize="42" FontWeight="Bold" FontFamily="Consolas" Foreground="{DynamicResource ClockLedBrush}" HorizontalAlignment="Center">
+                                    <Border Background="{DynamicResource ClockDisplayBgBrush}" BorderBrush="{DynamicResource BorderBrushSubtle}" BorderThickness="1" CornerRadius="14" Padding="30,14">
+                                        <TextBlock x:Name="ClockTimeText" Text="00:00:00" FontSize="56" FontWeight="Bold" FontFamily="Consolas" Foreground="{DynamicResource ClockLedBrush}" HorizontalAlignment="Center">
                                             <TextBlock.Effect>
-                                                <DropShadowEffect Color="{DynamicResource ClockLedColor}" BlurRadius="14" ShadowDepth="0" Opacity="0.65"/>
+                                                <DropShadowEffect Color="{DynamicResource ClockLedColor}" BlurRadius="18" ShadowDepth="0" Opacity="0.65"/>
                                             </TextBlock.Effect>
                                         </TextBlock>
                                     </Border>
-                                    <TextBlock x:Name="ClockDateText" Text="-- -- ----" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Center" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="ClockDateText" Text="-- -- ----" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Center" Margin="0,10,0,0"/>
                                 </StackPanel>
 
                                 <!-- Sağ: Ezan Vakitleri & Aktif Vakit Vurgusu -->
-                                <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="14,0,0,0">
-                                    <DockPanel Margin="0,0,0,8">
-                                        <Border DockPanel.Dock="Right" Background="{DynamicResource AccentBrush}" CornerRadius="10" Padding="10,3">
-                                            <TextBlock x:Name="NextPrayerCountdownText" Text="--:-- kaldı" FontSize="11" FontWeight="Bold" Foreground="White"/>
+                                <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="18,0,0,0">
+                                    <DockPanel Margin="0,0,0,10">
+                                        <Border DockPanel.Dock="Right" Background="{DynamicResource AccentBrush}" CornerRadius="12" Padding="12,4">
+                                            <TextBlock x:Name="NextPrayerCountdownText" Text="--:-- kaldı" FontSize="13" FontWeight="Bold" Foreground="White"/>
                                         </Border>
-                                        <TextBlock Text="🕌 Ezan Vakitleri" FontWeight="Bold" FontSize="13" VerticalAlignment="Center"/>
+                                        <TextBlock Text="🕌 Ezan Vakitleri" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
                                     </DockPanel>
                                     <UniformGrid Columns="3">
                                         <Border x:Name="ChipImsak" Style="{StaticResource PrayerChip}">
                                             <StackPanel HorizontalAlignment="Center">
-                                                <TextBlock Text="İmsak" FontSize="10" Opacity="0.8" HorizontalAlignment="Center"/>
-                                                <TextBlock x:Name="PrayerImsakText" Text="--:--" FontSize="13" FontWeight="Bold" FontFamily="Consolas" HorizontalAlignment="Center"/>
+                                                <TextBlock Text="İmsak" FontSize="12" Opacity="0.82" HorizontalAlignment="Center"/>
+                                                <TextBlock x:Name="PrayerImsakText" Text="--:--" FontSize="16" FontWeight="Bold" FontFamily="Consolas" HorizontalAlignment="Center"/>
                                             </StackPanel>
                                         </Border>
                                         <Border x:Name="ChipGunes" Style="{StaticResource PrayerChip}">
                                             <StackPanel HorizontalAlignment="Center">
-                                                <TextBlock Text="Güneş" FontSize="10" Opacity="0.8" HorizontalAlignment="Center"/>
-                                                <TextBlock x:Name="PrayerGunesText" Text="--:--" FontSize="13" FontWeight="Bold" FontFamily="Consolas" HorizontalAlignment="Center"/>
+                                                <TextBlock Text="Güneş" FontSize="12" Opacity="0.82" HorizontalAlignment="Center"/>
+                                                <TextBlock x:Name="PrayerGunesText" Text="--:--" FontSize="16" FontWeight="Bold" FontFamily="Consolas" HorizontalAlignment="Center"/>
                                             </StackPanel>
                                         </Border>
                                         <Border x:Name="ChipOgle" Style="{StaticResource PrayerChip}">
                                             <StackPanel HorizontalAlignment="Center">
-                                                <TextBlock Text="Öğle" FontSize="10" Opacity="0.8" HorizontalAlignment="Center"/>
-                                                <TextBlock x:Name="PrayerOgleText" Text="--:--" FontSize="13" FontWeight="Bold" FontFamily="Consolas" HorizontalAlignment="Center"/>
+                                                <TextBlock Text="Öğle" FontSize="12" Opacity="0.82" HorizontalAlignment="Center"/>
+                                                <TextBlock x:Name="PrayerOgleText" Text="--:--" FontSize="16" FontWeight="Bold" FontFamily="Consolas" HorizontalAlignment="Center"/>
                                             </StackPanel>
                                         </Border>
                                         <Border x:Name="ChipIkindi" Style="{StaticResource PrayerChip}">
                                             <StackPanel HorizontalAlignment="Center">
-                                                <TextBlock Text="İkindi" FontSize="10" Opacity="0.8" HorizontalAlignment="Center"/>
-                                                <TextBlock x:Name="PrayerIkindiText" Text="--:--" FontSize="13" FontWeight="Bold" FontFamily="Consolas" HorizontalAlignment="Center"/>
+                                                <TextBlock Text="İkindi" FontSize="12" Opacity="0.82" HorizontalAlignment="Center"/>
+                                                <TextBlock x:Name="PrayerIkindiText" Text="--:--" FontSize="16" FontWeight="Bold" FontFamily="Consolas" HorizontalAlignment="Center"/>
                                             </StackPanel>
                                         </Border>
                                         <Border x:Name="ChipAksam" Style="{StaticResource PrayerChip}">
                                             <StackPanel HorizontalAlignment="Center">
-                                                <TextBlock Text="Akşam" FontSize="10" Opacity="0.8" HorizontalAlignment="Center"/>
-                                                <TextBlock x:Name="PrayerAksamText" Text="--:--" FontSize="13" FontWeight="Bold" FontFamily="Consolas" HorizontalAlignment="Center"/>
+                                                <TextBlock Text="Akşam" FontSize="12" Opacity="0.82" HorizontalAlignment="Center"/>
+                                                <TextBlock x:Name="PrayerAksamText" Text="--:--" FontSize="16" FontWeight="Bold" FontFamily="Consolas" HorizontalAlignment="Center"/>
                                             </StackPanel>
                                         </Border>
                                         <Border x:Name="ChipYatsi" Style="{StaticResource PrayerChip}">
                                             <StackPanel HorizontalAlignment="Center">
-                                                <TextBlock Text="Yatsı" FontSize="10" Opacity="0.8" HorizontalAlignment="Center"/>
-                                                <TextBlock x:Name="PrayerYatsiText" Text="--:--" FontSize="13" FontWeight="Bold" FontFamily="Consolas" HorizontalAlignment="Center"/>
+                                                <TextBlock Text="Yatsı" FontSize="12" Opacity="0.82" HorizontalAlignment="Center"/>
+                                                <TextBlock x:Name="PrayerYatsiText" Text="--:--" FontSize="16" FontWeight="Bold" FontFamily="Consolas" HorizontalAlignment="Center"/>
                                             </StackPanel>
                                         </Border>
                                     </UniformGrid>
@@ -995,54 +1015,27 @@
                             </Grid>
                         </Border>
 
-                        <!-- ARAMA ÇUBUĞU -->
-                        <Grid Margin="0,0,0,16">
-                            <Border x:Name="HomeSearchBorder" Background="{DynamicResource BarBgBrush}" BorderBrush="{DynamicResource BorderBrushSubtle}" BorderThickness="1" CornerRadius="12" Padding="6">
-                                <DockPanel>
-                                    <Button DockPanel.Dock="Right" Content="Google'da Ara / Git" Padding="18,8" Background="{DynamicResource AccentBrush}" Foreground="White" BorderThickness="0" FontWeight="SemiBold" Cursor="Hand" Click="BtnHomeSearch_Click"/>
-                                    <TextBox x:Name="HomeSearchBox" Tag="Web'de arayın veya bir adres yazın..." Background="Transparent" Foreground="{DynamicResource TextPrimaryBrush}" CaretBrush="{DynamicResource TextPrimaryBrush}" BorderThickness="0" FontSize="14" Padding="10,6" VerticalContentAlignment="Center" TextChanged="HomeSearchBox_TextChanged" PreviewKeyDown="HomeSearchBox_PreviewKeyDown" LostFocus="HomeSearchBox_LostFocus"/>
-                                </DockPanel>
-                            </Border>
-                            <Popup x:Name="HomeSuggestionsPopup"
-                                   PlacementTarget="{Binding ElementName=HomeSearchBorder}"
-                                   Placement="Bottom"
-                                   StaysOpen="False"
-                                   AllowsTransparency="True"
-                                   Width="{Binding ActualWidth, ElementName=HomeSearchBorder}">
-                                <Border Background="{DynamicResource BarBgBrush}" BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1" CornerRadius="8" Margin="0,4,0,0" Padding="4">
-                                    <ListBox x:Name="HomeSuggestionsListBox"
-                                             ItemContainerStyle="{StaticResource SuggestionListBoxItemStyle}"
-                                             Background="Transparent"
-                                             Foreground="{DynamicResource TextPrimaryBrush}"
-                                             BorderThickness="0"
-                                             MaxHeight="220"
-                                             MouseLeftButtonUp="HomeSuggestionsListBox_MouseLeftButtonUp"
-                                             KeyDown="HomeSuggestionsListBox_KeyDown"/>
-                                </Border>
-                            </Popup>
-                        </Grid>
-
                         <!-- ORTA SATIR: HIZLI YER İMLERİ + ZAMANLI HATIRLATICILAR -->
-                        <Grid Margin="0,0,0,16">
+                        <Grid Margin="0,0,0,22">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="16"/>
+                                <ColumnDefinition Width="22"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
 
                             <!-- Hızlı Yer İmleri -->
                             <Border Grid.Column="0" Style="{StaticResource DashboardCard}">
                                 <StackPanel>
-                                    <TextBlock Text="🔖 Hızlı Yer İmleri" FontSize="15" FontWeight="Bold" Margin="0,0,0,10"/>
-                                    <Grid Margin="0,0,0,10">
+                                    <TextBlock Text="🔖 Hızlı Yer İmleri" FontSize="18" FontWeight="Bold" Margin="0,0,0,14"/>
+                                    <Grid Margin="0,0,0,14">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="1.4*"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBox x:Name="BmTitleBox" Grid.Column="0" Margin="0,0,6,0" Padding="6,5" Background="{DynamicResource AppBgBrush}" Foreground="{DynamicResource TextPrimaryBrush}" BorderBrush="{DynamicResource BorderBrushSubtle}" Tag="Başlık (örn: GitHub)" KeyDown="BmBox_KeyDown"/>
-                                        <TextBox x:Name="BmUrlBox" Grid.Column="1" Margin="0,0,6,0" Padding="6,5" Background="{DynamicResource AppBgBrush}" Foreground="{DynamicResource TextPrimaryBrush}" BorderBrush="{DynamicResource BorderBrushSubtle}" Tag="Örnek URL (https://...)" KeyDown="BmBox_KeyDown"/>
-                                        <Button Grid.Column="2" Content="Ekle" Padding="12,5" Background="{DynamicResource AccentBrush}" Foreground="White" BorderThickness="0" Cursor="Hand" Click="BtnAddBookmark_Click"/>
+                                        <TextBox x:Name="BmTitleBox" Grid.Column="0" Margin="0,0,8,0" Padding="9,8" FontSize="13.5" Background="{DynamicResource AppBgBrush}" Foreground="{DynamicResource TextPrimaryBrush}" BorderBrush="{DynamicResource BorderBrushSubtle}" Tag="Başlık (örn: GitHub)" KeyDown="BmBox_KeyDown"/>
+                                        <TextBox x:Name="BmUrlBox" Grid.Column="1" Margin="0,0,8,0" Padding="9,8" FontSize="13.5" Background="{DynamicResource AppBgBrush}" Foreground="{DynamicResource TextPrimaryBrush}" BorderBrush="{DynamicResource BorderBrushSubtle}" Tag="Örnek URL (https://...)" KeyDown="BmBox_KeyDown"/>
+                                        <Button Grid.Column="2" Content="Ekle" Padding="16,8" FontSize="13.5" FontWeight="SemiBold" Background="{DynamicResource AccentBrush}" Foreground="White" BorderThickness="0" Cursor="Hand" Click="BtnAddBookmark_Click"/>
                                     </Grid>
                                     <ItemsControl x:Name="BookmarksItemsControl">
                                         <ItemsControl.ItemsPanel>
@@ -1052,10 +1045,10 @@
                                         </ItemsControl.ItemsPanel>
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <Border Background="{DynamicResource SurfaceBgBrush}" BorderBrush="{DynamicResource BorderBrushSubtle}" BorderThickness="1" CornerRadius="8" Padding="10,6" Margin="0,0,8,8" Cursor="Hand">
+                                                <Border Background="{DynamicResource SurfaceBgBrush}" BorderBrush="{DynamicResource BorderBrushSubtle}" BorderThickness="1" CornerRadius="10" Padding="14,9" Margin="0,0,10,10" Cursor="Hand">
                                                     <StackPanel Orientation="Horizontal">
-                                                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" MouseLeftButtonDown="BookmarkItem_Click" Tag="{Binding}"/>
-                                                        <Button Content="✕" FontSize="10" Padding="3,0" Background="Transparent" Foreground="{DynamicResource TextSecondaryBrush}" BorderThickness="0" Click="BtnDeleteBookmark_Click" Tag="{Binding}"/>
+                                                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center" Margin="0,0,10,0" MouseLeftButtonDown="BookmarkItem_Click" Tag="{Binding}"/>
+                                                        <Button Content="✕" FontSize="12" Padding="4,0" Background="Transparent" Foreground="{DynamicResource TextSecondaryBrush}" BorderThickness="0" Click="BtnDeleteBookmark_Click" Tag="{Binding}"/>
                                                     </StackPanel>
                                                 </Border>
                                             </DataTemplate>
@@ -1067,27 +1060,27 @@
                             <!-- Zamanlı Hatırlatıcılar -->
                             <Border Grid.Column="2" Style="{StaticResource DashboardCard}">
                                 <StackPanel>
-                                    <TextBlock Text="⏰ Zamanlı Hatırlatıcılar" FontSize="15" FontWeight="Bold" Margin="0,0,0,10"/>
-                                    <Grid Margin="0,0,0,10">
+                                    <TextBlock Text="⏰ Zamanlı Hatırlatıcılar" FontSize="18" FontWeight="Bold" Margin="0,0,0,14"/>
+                                    <Grid Margin="0,0,0,14">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="1.4*"/>
-                                            <ColumnDefinition Width="125"/>
-                                            <ColumnDefinition Width="75"/>
+                                            <ColumnDefinition Width="140"/>
+                                            <ColumnDefinition Width="82"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBox x:Name="RemTextBox" Grid.Column="0" Margin="0,0,6,0" Padding="6,5" Background="{DynamicResource AppBgBrush}" Foreground="{DynamicResource TextPrimaryBrush}" BorderBrush="{DynamicResource BorderBrushSubtle}" Tag="Görev veya hatırlatma..."/>
-                                        <DatePicker x:Name="RemDatePicker" Grid.Column="1" Margin="0,0,6,0" VerticalAlignment="Center"/>
-                                        <TextBox x:Name="RemTimeBox" Grid.Column="2" Margin="0,0,6,0" Padding="6,5" MaxLength="5" Background="{DynamicResource AppBgBrush}" Foreground="{DynamicResource TextPrimaryBrush}" BorderBrush="{DynamicResource BorderBrushSubtle}" Tag="09:30" TextChanged="RemTimeBox_TextChanged" KeyDown="RemBox_KeyDown"/>
-                                        <Button Grid.Column="3" Content="Ekle" Padding="12,5" Background="{DynamicResource AccentBrush}" Foreground="White" BorderThickness="0" Cursor="Hand" Click="BtnAddReminder_Click"/>
+                                        <TextBox x:Name="RemTextBox" Grid.Column="0" Margin="0,0,8,0" Padding="9,8" FontSize="13.5" Background="{DynamicResource AppBgBrush}" Foreground="{DynamicResource TextPrimaryBrush}" BorderBrush="{DynamicResource BorderBrushSubtle}" Tag="Görev veya hatırlatma..."/>
+                                        <DatePicker x:Name="RemDatePicker" Grid.Column="1" Margin="0,0,8,0" FontSize="13" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="RemTimeBox" Grid.Column="2" Margin="0,0,8,0" Padding="9,8" FontSize="13.5" MaxLength="5" Background="{DynamicResource AppBgBrush}" Foreground="{DynamicResource TextPrimaryBrush}" BorderBrush="{DynamicResource BorderBrushSubtle}" Tag="09:30" TextChanged="RemTimeBox_TextChanged" KeyDown="RemBox_KeyDown"/>
+                                        <Button Grid.Column="3" Content="Ekle" Padding="16,8" FontSize="13.5" FontWeight="SemiBold" Background="{DynamicResource AccentBrush}" Foreground="White" BorderThickness="0" Cursor="Hand" Click="BtnAddReminder_Click"/>
                                     </Grid>
                                     <ItemsControl x:Name="RemindersItemsControl">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <Border x:Name="RemBorder" Background="{DynamicResource SurfaceBgBrush}" CornerRadius="6" Padding="8,6" Margin="0,0,0,6">
+                                                <Border x:Name="RemBorder" Background="{DynamicResource SurfaceBgBrush}" CornerRadius="8" Padding="12,9" Margin="0,0,0,8">
                                                     <DockPanel>
-                                                        <Button DockPanel.Dock="Right" Content="✕" FontSize="10" Padding="4,0" Background="Transparent" Foreground="{DynamicResource TextSecondaryBrush}" BorderThickness="0" Click="BtnDeleteReminder_Click" Tag="{Binding}"/>
-                                                        <TextBlock DockPanel.Dock="Right" Text="{Binding DueTime, StringFormat='{}{0:dd.MM HH:mm}'}" FontSize="11" Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                                                        <TextBlock x:Name="RemText" Text="{Binding Text}" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                                        <Button DockPanel.Dock="Right" Content="✕" FontSize="12" Padding="5,0" Background="Transparent" Foreground="{DynamicResource TextSecondaryBrush}" BorderThickness="0" Click="BtnDeleteReminder_Click" Tag="{Binding}"/>
+                                                        <TextBlock DockPanel.Dock="Right" Text="{Binding DueTime, StringFormat='{}{0:dd.MM HH:mm}'}" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                                        <TextBlock x:Name="RemText" Text="{Binding Text}" FontSize="14" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
                                                     </DockPanel>
                                                 </Border>
                                                 <DataTemplate.Triggers>
@@ -1106,14 +1099,14 @@
                         <!-- ALT SATIR: RENKLİ VE SÜRÜKLENEBİLİR YAPIŞKAN NOTLAR -->
                         <Border Style="{StaticResource DashboardCard}">
                             <StackPanel>
-                                <DockPanel Margin="0,0,0,12">
+                                <DockPanel Margin="0,0,0,16">
                                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                                        <TextBox x:Name="NoteInputBox" Width="320" Padding="8,5" Margin="0,0,8,0" Background="{DynamicResource AppBgBrush}" Foreground="{DynamicResource TextPrimaryBrush}" BorderBrush="{DynamicResource BorderBrushSubtle}" Tag="Yeni bir not yazın ve Enter'a basın..." KeyDown="NoteInputBox_KeyDown"/>
-                                        <Button Content="➕ Not Ekle" Padding="12,5" Background="{DynamicResource AccentBrush}" Foreground="White" BorderThickness="0" FontWeight="SemiBold" Cursor="Hand" Click="BtnAddNote_Click"/>
+                                        <TextBox x:Name="NoteInputBox" Width="400" Padding="10,8" FontSize="13.5" Margin="0,0,10,0" Background="{DynamicResource AppBgBrush}" Foreground="{DynamicResource TextPrimaryBrush}" BorderBrush="{DynamicResource BorderBrushSubtle}" Tag="Yeni bir not yazın ve Enter'a basın..." KeyDown="NoteInputBox_KeyDown"/>
+                                        <Button Content="➕ Not Ekle" Padding="16,8" FontSize="13.5" Background="{DynamicResource AccentBrush}" Foreground="White" BorderThickness="0" FontWeight="SemiBold" Cursor="Hand" Click="BtnAddNote_Click"/>
                                     </StackPanel>
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="📌 Yapışkan Notlar" FontSize="15" FontWeight="Bold" VerticalAlignment="Center"/>
-                                        <TextBlock Text="  (Sürükleyerek taşıyın, noktalardan renk seçin)" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center"/>
+                                        <TextBlock Text="📌 Yapışkan Notlar" FontSize="18" FontWeight="Bold" VerticalAlignment="Center"/>
+                                        <TextBlock Text="  (Sürükleyerek taşıyın, noktalardan renk seçin)" FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center"/>
                                     </StackPanel>
                                 </DockPanel>
 
@@ -1125,10 +1118,10 @@
                                     </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                            <Grid Margin="0,6,14,14" VerticalAlignment="Top">
+                                            <Grid Margin="0,8,18,18" VerticalAlignment="Top">
                                                 <Border x:Name="NoteCard"
-                                                        Width="248" MinHeight="125" MaxHeight="225" VerticalAlignment="Top"
-                                                        CornerRadius="4,4,16,4" Padding="14,16,14,14"
+                                                        Width="290" MinHeight="155" MaxHeight="265" VerticalAlignment="Top"
+                                                        CornerRadius="4,4,16,4" Padding="16,18,16,16"
                                                         Cursor="SizeAll" AllowDrop="True"
                                                         RenderTransformOrigin="0.5,0.5"
                                                         PreviewMouseLeftButtonDown="StickyNote_PreviewMouseLeftButtonDown"
@@ -1199,24 +1192,24 @@
                                                     <Grid>
                                                         <DockPanel>
                                                             <!-- Üst Renk Seçici, Düzenleme ve Silme Çubuğu -->
-                                                            <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                                                            <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
                                                                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                                                                    <Button Content="✏️" FontSize="11" Padding="4,0" Margin="0,0,2,0"
+                                                                    <Button Content="✏️" FontSize="13" Padding="5,0" Margin="0,0,2,0"
                                                                             Background="Transparent" Foreground="#333333" BorderThickness="0" Cursor="Hand"
                                                                             ToolTip="Notu Düzenle" Click="BtnEditNote_Click" Tag="{Binding}"/>
-                                                                    <Button Content="✕" FontSize="11" FontWeight="Bold" Padding="4,0"
+                                                                    <Button Content="✕" FontSize="13" FontWeight="Bold" Padding="5,0"
                                                                             Background="Transparent" Foreground="#333333" BorderThickness="0" Cursor="Hand"
                                                                             Click="BtnDeleteNote_Click" Tag="{Binding}"/>
                                                                 </StackPanel>
                                                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                                                    <Button Width="14" Height="14" Margin="0,0,4,0" Padding="0" Background="#FEF08A" BorderBrush="#66000000" BorderThickness="1" Cursor="Hand" Tag="#FEF08A" Click="BtnNoteColor_Click" ToolTip="Sarı"/>
-                                                                    <Button Width="14" Height="14" Margin="0,0,4,0" Padding="0" Background="#BBF7D0" BorderBrush="#66000000" BorderThickness="1" Cursor="Hand" Tag="#BBF7D0" Click="BtnNoteColor_Click" ToolTip="Yeşil"/>
-                                                                    <Button Width="14" Height="14" Margin="0,0,4,0" Padding="0" Background="#BAE6FD" BorderBrush="#66000000" BorderThickness="1" Cursor="Hand" Tag="#BAE6FD" Click="BtnNoteColor_Click" ToolTip="Mavi"/>
-                                                                    <Button Width="14" Height="14" Margin="0,0,4,0" Padding="0" Background="#FBCFE8" BorderBrush="#66000000" BorderThickness="1" Cursor="Hand" Tag="#FBCFE8" Click="BtnNoteColor_Click" ToolTip="Pembe"/>
-                                                                    <Button Width="14" Height="14" Margin="0,0,4,0" Padding="0" Background="#DDD6FE" BorderBrush="#66000000" BorderThickness="1" Cursor="Hand" Tag="#DDD6FE" Click="BtnNoteColor_Click" ToolTip="Lavanta"/>
+                                                                    <Button Width="16" Height="16" Margin="0,0,5,0" Padding="0" Background="#FEF08A" BorderBrush="#66000000" BorderThickness="1" Cursor="Hand" Tag="#FEF08A" Click="BtnNoteColor_Click" ToolTip="Sarı"/>
+                                                                    <Button Width="16" Height="16" Margin="0,0,5,0" Padding="0" Background="#BBF7D0" BorderBrush="#66000000" BorderThickness="1" Cursor="Hand" Tag="#BBF7D0" Click="BtnNoteColor_Click" ToolTip="Yeşil"/>
+                                                                    <Button Width="16" Height="16" Margin="0,0,5,0" Padding="0" Background="#BAE6FD" BorderBrush="#66000000" BorderThickness="1" Cursor="Hand" Tag="#BAE6FD" Click="BtnNoteColor_Click" ToolTip="Mavi"/>
+                                                                    <Button Width="16" Height="16" Margin="0,0,5,0" Padding="0" Background="#FBCFE8" BorderBrush="#66000000" BorderThickness="1" Cursor="Hand" Tag="#FBCFE8" Click="BtnNoteColor_Click" ToolTip="Pembe"/>
+                                                                    <Button Width="16" Height="16" Margin="0,0,5,0" Padding="0" Background="#DDD6FE" BorderBrush="#66000000" BorderThickness="1" Cursor="Hand" Tag="#DDD6FE" Click="BtnNoteColor_Click" ToolTip="Lavanta"/>
                                                                 </StackPanel>
                                                             </DockPanel>
-                                                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" MaxHeight="158" Padding="0,0,4,0">
+                                                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" MaxHeight="195" Padding="0,0,4,0">
                                                                 <ScrollViewer.Resources>
                                                                     <Style TargetType="ScrollBar">
                                                                         <Setter Property="Width" Value="5"/>
@@ -1241,18 +1234,18 @@
                                                                         </Setter>
                                                                     </Style>
                                                                 </ScrollViewer.Resources>
-                                                                <TextBlock Text="{Binding Text}" Foreground="#1F2937" TextWrapping="Wrap" FontSize="12.5" FontWeight="Medium" LineHeight="18"/>
+                                                                <TextBlock Text="{Binding Text}" Foreground="#1F2937" TextWrapping="Wrap" FontSize="14.5" FontWeight="Medium" LineHeight="21"/>
                                                             </ScrollViewer>
                                                         </DockPanel>
 
                                                         <!-- Sağ Alt 3D Kıvrık Kağıt Köşesi -->
-                                                        <Polygon Points="0,16 16,0 16,16" Fill="#28000000" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,-14,-14" IsHitTestVisible="False"/>
+                                                        <Polygon Points="0,18 18,0 18,18" Fill="#28000000" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,-16,-16" IsHitTestVisible="False"/>
                                                     </Grid>
                                                 </Border>
 
                                                 <!-- Üst Yapışkan Bant Efekti -->
-                                                <Border Width="54" Height="13" Background="#55FFFFFF" BorderBrush="#22000000" BorderThickness="1"
-                                                        HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,-6,0,0" IsHitTestVisible="False">
+                                                <Border Width="62" Height="15" Background="#55FFFFFF" BorderBrush="#22000000" BorderThickness="1"
+                                                        HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,-7,0,0" IsHitTestVisible="False">
                                                     <Border.RenderTransform>
                                                         <RotateTransform Angle="-2"/>
                                                     </Border.RenderTransform>
@@ -1384,12 +1377,32 @@
 
                         <TextBlock Text="🛡️ Gizlilik Kalkanı" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,4,0,8"/>
                         <CheckBox x:Name="ChkAdBlock" Content="Reklam ve Tracker Engelleyici" IsChecked="True" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,4" Checked="PrivacyCheck_Changed" Unchecked="PrivacyCheck_Changed"/>
-                        <CheckBox x:Name="ChkFingerprint" Content="Parmak İzi (Fingerprint) Koruması" IsChecked="True" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,4" Checked="PrivacyCheck_Changed" Unchecked="PrivacyCheck_Changed"/>
+                        <CheckBox x:Name="ChkFingerprint" Content="Yerleşik İzleme &amp; Parmak İzi Koruması (Edge)" ToolTip="Microsoft Edge'in yerel Dengeli İzleme Korumasını kullanır; siteleri bozan sahte JS müdahalesi yapmaz." IsChecked="True" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,4" Checked="PrivacyCheck_Changed" Unchecked="PrivacyCheck_Changed"/>
                         <CheckBox x:Name="ChkBlockCookies" Content="Üçüncü Taraf / Tüm Çerezleri Engelle" IsChecked="False" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,4" Checked="PrivacyCheck_Changed" Unchecked="PrivacyCheck_Changed"/>
                         <CheckBox x:Name="ChkRememberTabs" Content="Kapanışta Sekmeleri Hatırla" IsChecked="True" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,4" Checked="PrivacyCheck_Changed" Unchecked="PrivacyCheck_Changed"/>
                         <CheckBox x:Name="ChkAutoSleepTabs" Content="Kullanılmayan Sekmeleri Uyut (RAM Tasarrufu)" IsChecked="True" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,4" Checked="PrivacyCheck_Changed" Unchecked="PrivacyCheck_Changed"/>
                         <CheckBox x:Name="ChkMinimizeToTray" Content="Kapatınca Sistem Tepsisinde Çalış (Arka Plan)" IsChecked="False" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,4" Checked="PrivacyCheck_Changed" Unchecked="PrivacyCheck_Changed"/>
-                        <CheckBox x:Name="ChkRunOnStartup" Content="Windows Açılışında Başlat" IsChecked="False" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,4,0,14" Checked="ChkRunOnStartup_Changed" Unchecked="ChkRunOnStartup_Changed"/>
+                        <CheckBox x:Name="ChkRunOnStartup" Content="Windows Açılışında Başlat" IsChecked="False" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,4,0,10" Checked="ChkRunOnStartup_Changed" Unchecked="ChkRunOnStartup_Changed"/>
+
+                        <!-- UYUMLULUK MODUNDAKİ SİTELER (KALKAN KAPALI) -->
+                        <Border Background="{DynamicResource SurfaceBgBrush}" BorderBrush="{DynamicResource BorderBrushSubtle}" BorderThickness="1" CornerRadius="8" Padding="10,8" Margin="0,0,0,14">
+                            <StackPanel>
+                                <TextBlock Text="🔓 Uyumluluk Modundaki Siteler (Kalkan Kapalı)" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="CompatibleDomainsEmptyText" Text="Engel/erişim hatası veren sitelerde adres çubuğundaki 🛡️ kalkan simgesine tıklayarak ekleyebilirsiniz." FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                <ItemsControl x:Name="CompatibleDomainsItemsControl" Margin="0,4,0,0">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="{DynamicResource AppBgBrush}" CornerRadius="5" Padding="8,4" Margin="0,3,0,0">
+                                                <DockPanel>
+                                                    <Button DockPanel.Dock="Right" Style="{StaticResource IconToolButton}" Content="✕" Padding="5,1" FontSize="11" ToolTip="Kalkanı bu site için tekrar aç" Click="BtnRemoveCompatibleDomain_Click" Tag="{Binding}"/>
+                                                    <TextBlock Text="{Binding}" FontSize="11.5" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                                </DockPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
 
                         <!-- ŞİFRE KASASI -->
                         <StackPanel Margin="0,0,0,14">

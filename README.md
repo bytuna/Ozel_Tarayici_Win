@@ -19,7 +19,7 @@
 
 ### Gizlilik, Güvenlik & Şifre Kasası
 * **Gerçek Gizli Mod (`InPrivate`):** Mor/antrasit özel tema, bağımsız sekme şeridi, `IsInPrivateModeEnabled` motoru ve kapanışta geçici klasör temizliği.
-* **Reklam & Parmak İzi Koruması:** Reklam/tracker ağ engelleme + kozmetik sayfa filtresi, Canvas/WebGL maskeleme ve `navigator.webdriver` gizleme.
+* **Reklam, İzleme & Site Kalkanı:** Reklam/tracker ağ engelleme + kozmetik sayfa filtresi, Edge yerleşik izleme koruması, adres çubuğunda site bazlı **🛡️ Kalkan / 🔓 Uyumluluk Modu** ve tek tıkla **Varsayılan Tarayıcıda Aç** desteği.
 * **🔐 Şifre Kasası:** Sayfa formlarından otomatik şifre yakalama, tek tıkla doldurma, şifre görüntüleme/düzenleme, 16 haneli güçlü şifre üretici ve **Windows DPAPI** yerel şifreleme.
 * **Üst Düzey Şifre Aktarımı:** **PBKDF2 + AES-256-GCM** ana parolalı şifreli yedek (`.ozelpwd`), Chrome/Edge uyumlu `.csv` ve `.json` içe/dışa aktarma.
 

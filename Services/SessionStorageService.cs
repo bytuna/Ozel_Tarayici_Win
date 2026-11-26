@@ -35,6 +35,7 @@ public static class SessionStorageService
                     {
                         data.Groups.Add(new TabGroup { Id = "general", Name = "Genel", ColorHex = "#00B37E" });
                     }
+                    data.CompatibleDomains ??= new List<string>();
                     foreach (var pwd in data.SavedPasswords)
                     {
                         if (!string.IsNullOrEmpty(pwd.EncryptedPassword))

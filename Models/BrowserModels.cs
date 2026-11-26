@@ -203,6 +203,12 @@ public sealed class BrowserTabItem : INotifyPropertyChanged
     [JsonIgnore]
     public WebView2? WebView { get; set; }
 
+    [JsonIgnore]
+    public Services.WebViewPrivacyController? PrivacyController { get; set; }
+
+    [JsonIgnore]
+    public bool IsPdfDocument { get; set; }
+
     public event PropertyChangedEventHandler? PropertyChanged;
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
@@ -416,6 +422,7 @@ public sealed class AppSessionData
     public bool IsAdBlockEnabled { get; set; } = true;
     public bool BlockAllCookies { get; set; }
     public bool IsAntiFingerprintEnabled { get; set; } = true;
+    public List<string> CompatibleDomains { get; set; } = new();
     public bool RememberTabs { get; set; } = true;
     public bool MinimizeToTrayOnClose { get; set; }
     public bool AutoSleepInactiveTabs { get; set; } = true;

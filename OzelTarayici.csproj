@@ -10,7 +10,7 @@
     <ApplicationIcon>icon.ico</ApplicationIcon>
     <AssemblyName>OzelTarayici</AssemblyName>
     <Product>Özel Tarayıcı</Product>
-    <Version>1.0.2</Version>
+    <Version>1.0.5</Version>
   </PropertyGroup>
 
   <ItemGroup>
